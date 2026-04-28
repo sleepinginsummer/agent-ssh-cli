@@ -98,7 +98,9 @@ AGENT_SSH_CONFIG=/path/to/config.json
 ```
 
 3. 将 `SKILL.md` 添加到 agent 中
+
 测试命令
+
 ```bash
 agentsshcli list
 ```
