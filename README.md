@@ -2,6 +2,15 @@
 
 本项目参考 [classfang/ssh-mcp-server](https://github.com/classfang/ssh-mcp-server) 的 SSH 操作能力设计，改写为独立 CLI 形式。感谢原项目提供的思路和能力基础。
 
+AI 安装请阅读 [AI_INSTALL.md](AI_INSTALL.md)，按说明安装 CLI 并添加 `SKILL.md`。
+
+# 把项目的这句丢给ai一键安装
+
+```
+安装请阅读 [AI_INSTALL.md](https://github.com/sleepinginsummer/agent-ssh-cli/blob/main/AI_INSTALL.md)，按说明安装 CLI 并添加 `SKILL.md`。
+```
+
+# 手动安装
 ## 环境要求
 
 - Node.js `>= 20`
@@ -33,7 +42,7 @@ mkdir -p ~/.agent-ssh-cli
 AGENT_SSH_CONFIG=/path/to/config.json agentsshcli list
 ```
 
-3. 将 `SKILLS.md` 添加到 agent 中
+3. 将 `SKILL.md` 添加到 agent 中
 
 
 
@@ -93,7 +102,7 @@ AGENT_SSH_CONFIG=/path/to/config.json agentsshcli list
 
 ```
 
-卸载和清理：
+# 卸载和清理：
 
 ```bash
 npm uninstall -g agent-ssh-cli
