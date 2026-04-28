@@ -1,0 +1,4 @@
+node_modules/
+tmp/
+npm-debug.log*
+ssh-config.json

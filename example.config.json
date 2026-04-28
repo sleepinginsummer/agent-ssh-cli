@@ -1,0 +1,41 @@
+[
+  {
+    "name": "密码服务器",
+    "host": "192.0.2.10",
+    "port": 22,
+    "username": "root",
+    "password": "******",
+    "pty": false,
+    "allowedLocalPaths": [
+      "./tmp"
+    ],
+    "commandBlacklist": [
+      "(^|[;&|()[:space:]])rm([[:space:]]|$)",
+      "(^|[;&|()[:space:]])shutdown([[:space:]]|$)",
+      "(^|[;&|()[:space:]])reboot([[:space:]]|$)"
+    ]
+  },
+  {
+    "name": "密钥服务器",
+    "host": "198.51.100.10",
+    "port": 22,
+    "username": "deploy",
+    "privateKey": "/path/to/id_rsa",
+    "passphrase": "******",
+    "pty": false,
+    "allowedLocalPaths": [
+      "./tmp",
+      "./dist"
+    ],
+    "commandWhitelist": [
+      "^pwd$",
+      "^ls(\\s|$)",
+      "^cat\\s+/var/log/app\\.log$"
+    ],
+    "commandBlacklist": [
+      "(^|[;&|()[:space:]])rm([[:space:]]|$)",
+      "(^|[;&|()[:space:]])shutdown([[:space:]]|$)",
+      "(^|[;&|()[:space:]])reboot([[:space:]]|$)"
+    ]
+  }
+]
