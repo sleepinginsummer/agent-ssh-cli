@@ -5,7 +5,8 @@ import { loadConfig, findConnection, validateLocalPath, getDefaultConfigPath } f
 import { requestDaemon } from "./daemon-client.js";
 import { normalizeCacheTtl } from "./daemon-paths.js";
 import { executeRemoteCommand, uploadFile, downloadFile } from "./ssh-client.js";
-import packageJson from "../package.json" with { type: "json" };
+
+const packageJson = JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "..", "package.json"), "utf8"));
 
 const HELP_TEXT = {
   agentsshcli: `

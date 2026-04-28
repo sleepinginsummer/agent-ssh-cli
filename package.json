@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "description": "基于 CLI 的 SSH 代理工具，按 ssh-mcp-server 的能力一一映射",
   "type": "module",
+  "engines": {
+    "node": ">=18",
+    "npm": ">=8"
+  },
   "files": [
     "bin/",
     "src/",

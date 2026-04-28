@@ -39,7 +39,7 @@ node --version
 npm --version
 ```
 
-如果 `node` 或 `npm` 不存在，提示用户先安装 Node.js `>= 20` 和 npm `>= 10`。
+如果 `node` 或 `npm` 不存在，提示用户先安装 Node.js `>= 18` 和 npm `>= 8`。
 
 CLI 可用后，再检查配置文件是否存在：
 

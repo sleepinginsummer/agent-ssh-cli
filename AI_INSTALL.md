@@ -16,7 +16,7 @@ node --version
 npm --version
 ```
 
-需要 Node.js `>= 20` 和 npm `>= 10`。
+需要 Node.js `>= 18` 和 npm `>= 8`。
 
 ## 2. 初始化配置目录
 
