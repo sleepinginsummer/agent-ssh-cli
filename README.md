@@ -6,7 +6,7 @@
 ## 把项目的这句丢给ai一键安装
 
 ```
-安装请阅读 [AI_INSTALL.md](https://github.com/sleepinginsummer/agent-ssh-cli/blob/main/AI_INSTALL.md)，按说明安装 CLI 并添加 `SKILL.md`。
+安装请阅读 https://github.com/sleepinginsummer/agent-ssh-cli/blob/main/AI_INSTALL.md，按说明安装 CLI 并添加 `SKILL.md`。
 ```
 
 ## 手动安装
