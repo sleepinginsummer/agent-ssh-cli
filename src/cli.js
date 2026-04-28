@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { loadConfig, findConnection, validateLocalPath, getDefaultConfigPath } from "./config.js";
 import { requestDaemon } from "./daemon-client.js";
 import { normalizeCacheTtl } from "./daemon-paths.js";
 import { executeRemoteCommand, uploadFile, downloadFile } from "./ssh-client.js";
 
-const packageJson = JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "..", "package.json"), "utf8"));
+const currentDir = path.dirname(fileURLToPath(import.meta.url));
+const packageJson = JSON.parse(fs.readFileSync(path.join(currentDir, "..", "package.json"), "utf8"));
 
 const HELP_TEXT = {
   agentsshcli: `
@@ -87,7 +89,7 @@ function getHelpName(commandName) {
 
 function initConfig() {
   const target = getDefaultConfigPath();
-  const source = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "example.config.json");
+  const source = path.join(currentDir, "..", "example.config.json");
   if (fs.existsSync(target)) {
     throw new Error(`${target} 已存在，未覆盖`);
   }

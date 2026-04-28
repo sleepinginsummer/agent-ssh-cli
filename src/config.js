@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 const DEFAULT_CONFIG_DIR = ".agent-ssh-cli";
 const DEFAULT_CONFIG_FILE = "config.json";
@@ -98,7 +99,7 @@ function normalizeConfigEntry(entry, index) {
 }
 
 export function getProjectRoot() {
-  return path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 }
 
 export function getDefaultConfigPath() {

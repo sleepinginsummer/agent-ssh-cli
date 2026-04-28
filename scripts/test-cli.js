@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
-const projectRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const binPath = path.join(projectRoot, "bin", "agentsshcli.js");
 const tmpDir = path.join(projectRoot, "tmp");
 const localUploadFile = path.join(tmpDir, "upload.txt");
