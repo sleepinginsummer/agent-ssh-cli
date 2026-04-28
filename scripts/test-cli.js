@@ -9,7 +9,7 @@ const localUploadFile = path.join(tmpDir, "upload.txt");
 const localDownloadFile = path.join(tmpDir, "download.txt");
 const remoteDir = "/usr/loca/test";
 const remoteFile = `${remoteDir}/upload.txt`;
-const connectionName = "syy阿里云";
+const connectionName = "aliyun";
 
 fs.mkdirSync(tmpDir, { recursive: true });
 fs.writeFileSync(localUploadFile, "agent-ssh-cli test file\n", "utf8");
