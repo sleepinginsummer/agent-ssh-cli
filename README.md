@@ -16,9 +16,10 @@
 1. 全局安装：
 
 ```bash
-npm install -g agent-ssh-cli
+npm install -g github:sleepinginsummer/agent-ssh-cli
 agentsshcli --help
 ```
+
 
 2. 初始化配置：
 
