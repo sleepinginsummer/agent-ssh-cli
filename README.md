@@ -1,5 +1,7 @@
 # agent-ssh-cli
 
+本项目参考 [classfang/ssh-mcp-server](https://github.com/classfang/ssh-mcp-server) 的 SSH 操作能力设计，改写为独立 CLI 形式。感谢原项目提供的思路和能力基础。
+
 ## 环境要求
 
 - Node.js `>= 20`
@@ -11,24 +13,28 @@
 
 ## 使用说明
 
-通过 GitHub 使用：
+1. 全局安装：
 
 ```bash
-npx -y github:sleepinginsummer/agent-ssh-cli agentsshcli --help
+npm install -g agent-ssh-cli
+agentsshcli --help
 ```
 
-初始化配置：
+2. 初始化配置：
 
 ```bash
 mkdir -p ~/.agent-ssh-cli
-vim ~/.agent-ssh-cli/config.json
 ```
 
 编辑 `~/.agent-ssh-cli/config.json`，填写真实连接信息。默认配置文件也可以通过环境变量覆盖：
 
 ```bash
-AGENT_SSH_CONFIG=/path/to/config.json npx -y github:sleepinginsummer/agent-ssh-cli agentsshcli list
+AGENT_SSH_CONFIG=/path/to/config.json agentsshcli list
 ```
+
+3. 将 `SKILLS.md` 添加到 agent 中
+
+
 
 配置文件是数组，每一项是一台服务器：
 
