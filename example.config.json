@@ -10,9 +10,9 @@
       "./tmp"
     ],
     "commandBlacklist": [
-      "(^|[;&|()[:space:]])rm([[:space:]]|$)",
-      "(^|[;&|()[:space:]])shutdown([[:space:]]|$)",
-      "(^|[;&|()[:space:]])reboot([[:space:]]|$)"
+      "(^|[;&|()\\s])rm(\\s|$)",
+      "(^|[;&|()\\s])shutdown(\\s|$)",
+      "(^|[;&|()\\s])reboot(\\s|$)"
     ]
   },
   {
@@ -33,9 +33,9 @@
       "^cat\\s+/var/log/app\\.log$"
     ],
     "commandBlacklist": [
-      "(^|[;&|()[:space:]])rm([[:space:]]|$)",
-      "(^|[;&|()[:space:]])shutdown([[:space:]]|$)",
-      "(^|[;&|()[:space:]])reboot([[:space:]]|$)"
+      "(^|[;&|()\\s])rm(\\s|$)",
+      "(^|[;&|()\\s])shutdown(\\s|$)",
+      "(^|[;&|()\\s])reboot(\\s|$)"
     ]
   }
 ]

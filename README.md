@@ -55,6 +55,8 @@ AGENT_SSH_CONFIG=/path/to/config.json
 - `commandWhitelist`: 命令白名单正则数组
 - `commandBlacklist`: 命令黑名单正则数组
 
+`commandWhitelist` 和 `commandBlacklist` 使用 JavaScript `RegExp` 语法，不是 POSIX 正则；空白字符请写成 `\\s`，不要写 `[:space:]`。
+
 完整示例见 [example.config.json](example.config.json)。`~/.agent-ssh-cli/config.json` 保存真实连接信息。
 
 ```json
@@ -66,9 +68,9 @@ AGENT_SSH_CONFIG=/path/to/config.json
     "username": "root",
     "password": "******",
     "commandBlacklist": [
-      "(^|[;&|()[:space:]])rm([[:space:]]|$)",
-      "(^|[;&|()[:space:]])shutdown([[:space:]]|$)",
-      "(^|[;&|()[:space:]])reboot([[:space:]]|$)"
+      "(^|[;&|()\\s])rm(\\s|$)",
+      "(^|[;&|()\\s])shutdown(\\s|$)",
+      "(^|[;&|()\\s])reboot(\\s|$)"
     ]
   },
   {
@@ -89,9 +91,9 @@ AGENT_SSH_CONFIG=/path/to/config.json
       "^cat\\s+/var/log/app\\.log$"
     ],
     "commandBlacklist": [
-      "(^|[;&|()[:space:]])rm([[:space:]]|$)",
-      "(^|[;&|()[:space:]])shutdown([[:space:]]|$)",
-      "(^|[;&|()[:space:]])reboot([[:space:]]|$)"
+      "(^|[;&|()\\s])rm(\\s|$)",
+      "(^|[;&|()\\s])shutdown(\\s|$)",
+      "(^|[;&|()\\s])reboot(\\s|$)"
     ]
   }
 ]
