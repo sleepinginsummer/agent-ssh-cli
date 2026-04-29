@@ -2,8 +2,17 @@
 
 本项目参考 [classfang/ssh-mcp-server](https://github.com/classfang/ssh-mcp-server) 的 SSH 操作能力设计，改写为独立 CLI 形式。感谢原项目提供的思路和能力基础。
 
+[中文](README.md) | [English](README_EN.md)
 
-## 把这句丢给ai一键安装
+## 导航
+
+- [AI 一键安装](#ai-一键安装)
+- [手动安装](#手动安装)
+- [卸载和清理](#卸载和清理)
+- [许可证](#许可证)
+- [友情链接](#友情链接)
+
+## AI 一键安装
 
 ```
 安装请阅读 https://github.com/sleepinginsummer/agent-ssh-cli/blob/main/AI_INSTALL.md，按说明安装 CLI 并添加 `SKILL.md`。
@@ -109,7 +118,7 @@ agentsshcli list
 
 完成安装!
 
-# 卸载和清理：
+## 卸载和清理
 
 ```bash
 npm uninstall -g agent-ssh-cli
@@ -117,3 +126,11 @@ npm cache clean --force
 #删除配置文件
 rm -rf ~/.agent-ssh-cli
 ```
+
+## 许可证
+
+[MIT](LICENSE)
+
+## 友情链接
+
+- [LINUX DO - 新的理想型社区](https://linux.do/)

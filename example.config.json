@@ -5,7 +5,6 @@
     "port": 22,
     "username": "root",
     "password": "******",
-    "pty": false,
     "allowedLocalPaths": [
       "./tmp"
     ],
