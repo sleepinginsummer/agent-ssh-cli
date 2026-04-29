@@ -1,16 +1,27 @@
+<div align="center">
+
 # agent-ssh-cli
 
+基于 CLI 的 SSH 代理工具，按 ssh-mcp-server 的能力映射为 Agent 可调用的远端操作能力。
+
+远程执行 · 文件上传 · 文件下载 · 连接配置 · 命令白名单 · 命令黑名单 · Agent Skill 集成
+
+<p>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli"><img src="https://img.shields.io/badge/CLI-agentsshcli-2ea44f" alt="CLI agentsshcli"></a>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="License MIT"></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white" alt="Node.js >=18"></a>
+  <a href="https://www.npmjs.com/"><img src="https://img.shields.io/badge/npm-%3E%3D8-CB3837?logo=npm&logoColor=white" alt="npm >=8"></a>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.1.0-blue" alt="release v0.1.0"></a>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
+</p>
+
+[AI 一键安装](#ai-一键安装) · [手动安装](#手动安装) · [卸载和清理](#卸载和清理) · [许可证](#许可证) · [友情链接](#友情链接)
+
+中文 | [English](README_EN.md)
+
+</div>
+
 本项目参考 [classfang/ssh-mcp-server](https://github.com/classfang/ssh-mcp-server) 的 SSH 操作能力设计，改写为独立 CLI 形式。感谢原项目提供的思路和能力基础。
-
-[中文](README.md) | [English](README_EN.md)
-
-## 导航
-
-- [AI 一键安装](#ai-一键安装)
-- [手动安装](#手动安装)
-- [卸载和清理](#卸载和清理)
-- [许可证](#许可证)
-- [友情链接](#友情链接)
 
 ## AI 一键安装
 

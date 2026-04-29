@@ -1,16 +1,27 @@
+<div align="center">
+
 # agent-ssh-cli
 
+A CLI-based SSH agent tool that maps ssh-mcp-server-style capabilities into remote operations callable by agents.
+
+Remote exec · File upload · File download · Connection config · Command whitelist · Command blacklist · Agent Skill integration
+
+<p>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli"><img src="https://img.shields.io/badge/CLI-agentsshcli-2ea44f" alt="CLI agentsshcli"></a>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="License MIT"></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white" alt="Node.js >=18"></a>
+  <a href="https://www.npmjs.com/"><img src="https://img.shields.io/badge/npm-%3E%3D8-CB3837?logo=npm&logoColor=white" alt="npm >=8"></a>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.1.0-blue" alt="release v0.1.0"></a>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
+</p>
+
+[AI One-Click Installation](#ai-one-click-installation) · [Manual Installation](#manual-installation) · [Uninstall and Cleanup](#uninstall-and-cleanup) · [License](#license) · [Friendly Links](#friendly-links)
+
+[中文](README.md) | English
+
+</div>
+
 This project references the SSH operation design from [classfang/ssh-mcp-server](https://github.com/classfang/ssh-mcp-server) and rewrites it as an independent CLI. Thanks to the original project for the ideas and capability foundation.
-
-[中文](README.md) | [English](README_EN.md)
-
-## Navigation
-
-- [AI One-Click Installation](#ai-one-click-installation)
-- [Manual Installation](#manual-installation)
-- [Uninstall and Cleanup](#uninstall-and-cleanup)
-- [License](#license)
-- [Friendly Links](#friendly-links)
 
 ## AI One-Click Installation
 
