@@ -21,7 +21,22 @@ Remote exec · File upload · File download · Connection config · Command whit
 
 </div>
 
+## Introduction
 This project references the SSH operation design from [classfang/ssh-mcp-server](https://github.com/classfang/ssh-mcp-server) and rewrites it as an independent CLI. Thanks to the original project for the ideas and capability foundation.
+
+#### What it can do:
+- Free your hands and automate server operations
+- Deploy code and update Docker deployments
+- Configure nginx and certificates
+- Do anything SSH can do
+
+#### Its capabilities:
+- List SSH server connections from local configuration
+- Execute commands on a specified remote server
+- Upload local files to a remote server
+- Download files from a remote server to local
+- Restrict executable commands through command allowlists and blocklists
+- Restrict upload and download access scopes through a local path allowlist
 
 ## AI One-Click Installation
 
