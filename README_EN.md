@@ -2,7 +2,7 @@
 
 # agent-ssh-cli
 
-A CLI-based SSH agent tool that maps ssh-mcp-server-style capabilities into remote operations callable by agents.
+A CLI-based SSH agent tool that maps ssh-mcp-server capabilities into remote operations callable by agents.
 
 Remote exec · File upload · File download · Connection config · Command whitelist · Command blacklist · Agent Skill integration
 
@@ -15,7 +15,7 @@ Remote exec · File upload · File download · Connection config · Command whit
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
 </p>
 
-[AI One-Click Installation](#ai-one-click-installation) · [Manual Installation](#manual-installation) · [Uninstall and Cleanup](#uninstall-and-cleanup) · [License](#license) · [Friendly Links](#friendly-links)
+[AI One-Click Installation](#ai-one-click-installation) · [Manual Installation](#manual-installation) · [Configuration](#configuration) · [Uninstall and Cleanup](#uninstall-and-cleanup) · [License](#license) · [Friendly Links](#friendly-links)
 
 [中文](README.md) | English
 
@@ -30,7 +30,6 @@ Please read https://github.com/sleepinginsummer/agent-ssh-cli/blob/main/AI_INSTA
 ```
 
 ## Manual Installation
-
 ### Requirements
 
 - Node.js `>= 18`
@@ -49,7 +48,13 @@ npm install -g github:sleepinginsummer/agent-ssh-cli
 agentsshcli --help
 ```
 
-2. Initialize the configuration. The format is compatible with ssh-mcp-server:
+2. Import SKILL.md:
+
+Open [SKILL.md](SKILL.md) and add it to the agent.
+
+## Configuration
+
+Initialize the configuration. The format parameters are compatible with ssh-mcp-server:
 
 ```bash
 mkdir -p ~/.agent-ssh-cli
@@ -57,6 +62,7 @@ mkdir -p ~/.agent-ssh-cli
 
 Edit `~/.agent-ssh-cli/config.json` and fill in the real connection information. The default configuration file path can also be overridden with an environment variable:
 
+You can change the configuration location with the following environment variable:
 ```bash
 AGENT_SSH_CONFIG=/path/to/config.json
 ```
@@ -77,6 +83,8 @@ The configuration file is an array, and each item represents one server:
 `commandWhitelist` and `commandBlacklist` use JavaScript `RegExp` syntax, not POSIX regular expressions. Write whitespace as `\\s`; do not use `[:space:]`.
 
 See the full example in [example.config.json](example.config.json). Store real connection information in `~/.agent-ssh-cli/config.json`.
+
+Reference configuration
 
 ```json
 [
@@ -118,9 +126,7 @@ See the full example in [example.config.json](example.config.json). Store real c
 ]
 ```
 
-3. Add `SKILL.md` to the agent.
-
-Test command:
+Test command
 
 ```bash
 agentsshcli list

@@ -15,7 +15,7 @@
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
 </p>
 
-[AI 一键安装](#ai-一键安装) · [手动安装](#手动安装) · [卸载和清理](#卸载和清理) · [许可证](#许可证) · [友情链接](#友情链接)
+[AI 一键安装](#ai-一键安装) · [手动安装](#手动安装) · [配置](#配置) · [卸载和清理](#卸载和清理) · [许可证](#许可证) · [友情链接](#友情链接)
 
 中文 | [English](README_EN.md)
 
@@ -48,8 +48,13 @@ npm install -g github:sleepinginsummer/agent-ssh-cli
 agentsshcli --help
 ```
 
+2. 导入 SKILL.md:
 
-2. 初始化配置（格式和 ssh-mcp-server 一致）：
+打开 [SKILL.md](SKILL.md)，将其添加到 agent 中。
+
+## 配置
+
+初始化配置（格式参数和ssh-mcp-server一致）：
 
 ```bash
 mkdir -p ~/.agent-ssh-cli
@@ -78,6 +83,8 @@ AGENT_SSH_CONFIG=/path/to/config.json
 `commandWhitelist` 和 `commandBlacklist` 使用 JavaScript `RegExp` 语法，不是 POSIX 正则；空白字符请写成 `\\s`，不要写 `[:space:]`。
 
 完整示例见 [example.config.json](example.config.json)。`~/.agent-ssh-cli/config.json` 保存真实连接信息。
+
+参考配置
 
 ```json
 [
@@ -119,7 +126,7 @@ AGENT_SSH_CONFIG=/path/to/config.json
 ]
 ```
 
-3. 将 `SKILL.md` 添加到 agent 中
+
 
 测试命令
 
