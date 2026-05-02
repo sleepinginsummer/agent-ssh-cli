@@ -52,14 +52,14 @@ Please read https://github.com/sleepinginsummer/agent-ssh-cli/blob/main/AI_INSTA
 - Local network access to the target SSH server
 - SSH service enabled on the target server
 - If private key authentication is used, the private key file must be readable by the current user
-- The connection cache for `agentsshcli exec/upload/download` only supports macOS/Linux
+- The connection cache for `agentsshcli exec/upload/download` supports macOS/Linux/Windows
 
 ### Installation Steps
 
 1. Install globally:
 
 ```bash
-npm install -g github:sleepinginsummer/agent-ssh-cli
+npm install -g agent-ssh-cli
 agentsshcli --help
 ```
 

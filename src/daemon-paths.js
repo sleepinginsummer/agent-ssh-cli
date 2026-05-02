@@ -6,14 +6,11 @@ import process from "node:process";
 
 export const DEFAULT_CACHE_TTL_MS = 180000;
 
-export function ensureSupportedPlatform() {
-  if (process.platform === "win32") {
-    throw new Error("当前 SSH 连接缓存池暂不支持 Windows");
-  }
+export function isWindowsPlatform() {
+  return process.platform === "win32";
 }
 
 export function getDaemonDir() {
-  ensureSupportedPlatform();
   const uid = typeof process.getuid === "function" ? process.getuid() : "nouid";
   const daemonDir = path.join(os.tmpdir(), `agent-ssh-cli-${uid}`);
   fs.mkdirSync(daemonDir, { recursive: true, mode: 0o700 });
@@ -22,9 +19,33 @@ export function getDaemonDir() {
 }
 
 export function getSocketPath(configPath) {
-  ensureSupportedPlatform();
   const digest = crypto.createHash("sha256").update(path.resolve(configPath)).digest("hex").slice(0, 24);
+  if (isWindowsPlatform()) {
+    // Windows 下 Node IPC 使用 named pipe，不是文件系统 socket。
+    const userKey = process.env.USERPROFILE || process.env.USERNAME || os.homedir() || "nouser";
+    const userDigest = crypto.createHash("sha256").update(userKey).digest("hex").slice(0, 12);
+    return `\\\\.\\pipe\\agent-ssh-cli-${userDigest}-${digest}`;
+  }
   return path.join(getDaemonDir(), `${digest}.sock`);
+}
+
+export function unlinkSocketPath(socketPath) {
+  if (isWindowsPlatform()) {
+    return;
+  }
+  try {
+    fs.unlinkSync(socketPath);
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
+export function chmodSocketPath(socketPath) {
+  if (!isWindowsPlatform()) {
+    fs.chmodSync(socketPath, 0o600);
+  }
 }
 
 export function normalizeCacheTtl(value) {

@@ -4,7 +4,7 @@ import net from "node:net";
 import path from "node:path";
 import process from "node:process";
 import { findConnection, loadConfig, validateLocalPath } from "./config.js";
-import { DEFAULT_CACHE_TTL_MS, normalizeCacheTtl } from "./daemon-paths.js";
+import { chmodSocketPath, DEFAULT_CACHE_TTL_MS, normalizeCacheTtl, unlinkSocketPath } from "./daemon-paths.js";
 import {
   connectSshClient,
   downloadFileWithClient,
@@ -207,7 +207,7 @@ function shutdown() {
   if (server) {
     server.close(() => {
       try {
-        fs.unlinkSync(socketPath);
+        unlinkSocketPath(socketPath);
       } catch (error) {
         if (error.code !== "ENOENT") {
           process.stderr.write(`${error.message}\n`);
@@ -222,16 +222,10 @@ function shutdown() {
 
 try {
   ({ socketPath } = parseArgs(process.argv.slice(2)));
-  try {
-    fs.unlinkSync(socketPath);
-  } catch (error) {
-    if (error.code !== "ENOENT") {
-      throw error;
-    }
-  }
+  unlinkSocketPath(socketPath);
   server = net.createServer(handleSocket);
   server.listen(socketPath, () => {
-    fs.chmodSync(socketPath, 0o600);
+    chmodSocketPath(socketPath);
     scheduleExitCheck();
   });
   process.on("SIGTERM", shutdown);

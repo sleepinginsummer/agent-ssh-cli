@@ -96,11 +96,9 @@ AGENT_SSH_CONFIG=/path/to/config.json agentsshcli list
 如果 CLI 不可用但 Node/npm 正常，提示用户安装：
 
 ```bash
-npm install -g github:sleepinginsummer/agent-ssh-cli
+npm install -g agent-ssh-cli
 agentsshcli --help
 ```
-
-当前项目未发布到 npm registry，不要使用 `npm install -g agent-ssh-cli`。
 
 ## 全局参数
 

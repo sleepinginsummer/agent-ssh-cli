@@ -1,9 +1,8 @@
 import { spawn } from "node:child_process";
-import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getSocketPath } from "./daemon-paths.js";
+import { getSocketPath, unlinkSocketPath } from "./daemon-paths.js";
 
 const DAEMON_START_TIMEOUT_MS = 3000;
 const DAEMON_REQUEST_TIMEOUT_MS = 86400000;
@@ -14,16 +13,6 @@ function getDaemonEntryPath() {
 
 function isMissingSocketError(error) {
   return ["ENOENT", "ECONNREFUSED"].includes(error.code);
-}
-
-function unlinkSocket(socketPath) {
-  try {
-    fs.unlinkSync(socketPath);
-  } catch (error) {
-    if (error.code !== "ENOENT") {
-      throw error;
-    }
-  }
 }
 
 function connectSocket(socketPath, timeoutMs = DAEMON_REQUEST_TIMEOUT_MS) {
@@ -84,7 +73,7 @@ async function ensureDaemon(socketPath) {
       throw error;
     }
     if (error.code === "ECONNREFUSED") {
-      unlinkSocket(socketPath);
+      unlinkSocketPath(socketPath);
     }
   }
   spawnDaemon(socketPath);

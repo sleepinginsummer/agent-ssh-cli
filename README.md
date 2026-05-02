@@ -51,14 +51,14 @@
 - 本机网络可访问目标 SSH 服务器
 - 目标服务器已开启 SSH 服务
 - 如使用私钥认证，私钥文件需对当前用户可读
-- `agentsshcli exec/upload/download` 的连接缓存仅支持 macOS/Linux
+- `agentsshcli exec/upload/download` 的连接缓存支持 macOS/Linux/Windows
 
 ### 安装步骤
 
 1. 全局安装：
 
 ```bash
-npm install -g github:sleepinginsummer/agent-ssh-cli
+npm install -g agent-ssh-cli
 agentsshcli --help
 ```
 

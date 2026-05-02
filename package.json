@@ -14,10 +14,10 @@
     "README.md"
   ],
   "bin": {
-    "agentsshcli": "./bin/agentsshcli.js"
+    "agentsshcli": "bin/agentsshcli.js"
   },
   "scripts": {
-    "test": "node ./scripts/test-cli.js"
+    "test": "node --check bin/agentsshcli.js && node --check src/cli.js && node --check src/config.js && node --check src/daemon-client.js && node --check src/daemon-paths.js && node --check src/ssh-client.js && node --check src/ssh-daemon.js"
   },
   "dependencies": {
     "ssh2": "^1.17.0"

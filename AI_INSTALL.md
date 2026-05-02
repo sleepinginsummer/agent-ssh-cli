@@ -5,7 +5,7 @@
 ## 1. 安装 CLI
 
 ```bash
-npm install -g github:sleepinginsummer/agent-ssh-cli
+npm install -g agent-ssh-cli
 agentsshcli --help
 ```
 
