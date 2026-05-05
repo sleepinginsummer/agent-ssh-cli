@@ -242,10 +242,20 @@ function parseExecuteArgs(argv) {
     return parsed;
   }
   const args = [...parsed.args];
-  const connectionName = resolveValue(args, ["--connection", "-c"], "connectionName");
-  const command = resolveValue(args, ["--command"], "command");
-  const directory = resolveValue(args, ["--directory", "-d"], "directory");
-  const timeoutValue = resolveValue(args, ["--timeout", "-t"], "timeout");
+  const connectionNameOption = takeOption(args, ["--connection", "-c"]);
+  const commandOption = takeOption(args, ["--command"]);
+  const directoryOption = takeOption(args, ["--directory", "-d"]);
+  const timeoutOption = takeOption(args, ["--timeout", "-t"]);
+  const connectionNamePositional = takePositional(args, "connectionName");
+  const commandPositional = takePositional(args, "command");
+
+  ensureNoMixedInput(connectionNameOption.present ? connectionNameOption.value : undefined, connectionNamePositional, "connectionName");
+  ensureNoMixedInput(commandOption.present ? commandOption.value : undefined, commandPositional, "command");
+
+  const connectionName = connectionNameOption.present ? connectionNameOption.value : connectionNamePositional;
+  const command = commandOption.present ? commandOption.value : commandPositional;
+  const directory = directoryOption.present ? directoryOption.value : undefined;
+  const timeoutValue = timeoutOption.present ? timeoutOption.value : undefined;
   for (let index = 0; index < args.length; index += 1) {
     if (args[index]?.startsWith("--")) {
       throw new Error(`不支持的参数: ${args[index]}`);
