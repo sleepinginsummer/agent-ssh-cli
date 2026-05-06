@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const DEFAULT_CONFIG_DIR = ".agent-ssh-cli";
 const DEFAULT_CONFIG_FILE = "config.json";
+const configCache = new Map();
 
 function isNonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
@@ -23,7 +24,10 @@ function ensureRegexArray(patterns, fieldName, index) {
       throw new Error(`ssh-config.json 第 ${index + 1} 项的 ${fieldName} 必须只包含非空字符串`);
     }
     try {
-      return new RegExp(pattern), pattern;
+      return {
+        pattern,
+        regex: new RegExp(pattern)
+      };
     } catch (error) {
       throw new Error(`ssh-config.json 第 ${index + 1} 项的 ${fieldName} 含有非法正则: ${pattern}，${error.message}`);
     }
@@ -110,7 +114,13 @@ export function getDefaultConfigPath() {
 }
 
 export function loadConfig(configPath = getDefaultConfigPath()) {
-  const raw = fs.readFileSync(configPath, "utf8");
+  const resolvedConfigPath = path.resolve(configPath);
+  const stat = fs.statSync(resolvedConfigPath);
+  const cached = configCache.get(resolvedConfigPath);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    return cached.configs;
+  }
+  const raw = fs.readFileSync(resolvedConfigPath, "utf8");
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -131,6 +141,11 @@ export function loadConfig(configPath = getDefaultConfigPath()) {
     }
     seenNames.add(config.name);
   }
+  configCache.set(resolvedConfigPath, {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    configs
+  });
   return configs;
 }
 

@@ -29,6 +29,11 @@ export function getSocketPath(configPath) {
   return path.join(getDaemonDir(), `${digest}.sock`);
 }
 
+export function getTokenPath(configPath) {
+  const digest = crypto.createHash("sha256").update(path.resolve(configPath)).digest("hex").slice(0, 24);
+  return path.join(getDaemonDir(), `${digest}.token`);
+}
+
 export function unlinkSocketPath(socketPath) {
   if (isWindowsPlatform()) {
     return;
