@@ -1,10 +1,8 @@
 import { spawn } from "node:child_process";
-import crypto from "node:crypto";
-import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getSocketPath, getTokenPath, unlinkSocketPath } from "./daemon-paths.js";
+import { getSocketPath, unlinkSocketPath } from "./daemon-paths.js";
 
 const DAEMON_START_TIMEOUT_MS = 3000;
 const DAEMON_REQUEST_TIMEOUT_MS = 86400000;
@@ -41,19 +39,8 @@ function connectSocket(socketPath, timeoutMs = DAEMON_REQUEST_TIMEOUT_MS) {
   });
 }
 
-function readToken(tokenPath) {
-  return fs.readFileSync(tokenPath, "utf8").trim();
-}
-
-function createToken(tokenPath) {
-  const token = crypto.randomBytes(32).toString("hex");
-  fs.writeFileSync(tokenPath, token, { mode: 0o600 });
-  fs.chmodSync(tokenPath, 0o600);
-  return token;
-}
-
-function spawnDaemon(socketPath, configPath, tokenPath) {
-  const child = spawn(process.execPath, [getDaemonEntryPath(), "--socket", socketPath, "--config", path.resolve(configPath), "--token-file", tokenPath], {
+function spawnDaemon(socketPath, configPath) {
+  const child = spawn(process.execPath, [getDaemonEntryPath(), "--socket", socketPath, "--config", path.resolve(configPath)], {
     detached: true,
     stdio: "ignore"
   });
@@ -76,15 +63,11 @@ async function waitForDaemon(socketPath) {
   throw new Error(`启动 SSH 缓存进程失败: ${lastError?.message || "未知错误"}`);
 }
 
-async function ensureDaemon(socketPath, configPath, tokenPath) {
+async function ensureDaemon(socketPath, configPath) {
   try {
     const socket = await connectSocket(socketPath, 500);
     socket.end();
-    try {
-      return readToken(tokenPath);
-    } catch (error) {
-      unlinkSocketPath(socketPath);
-    }
+    return;
   } catch (error) {
     if (!isMissingSocketError(error)) {
       throw error;
@@ -93,16 +76,13 @@ async function ensureDaemon(socketPath, configPath, tokenPath) {
       unlinkSocketPath(socketPath);
     }
   }
-  const token = createToken(tokenPath);
-  spawnDaemon(socketPath, configPath, tokenPath);
+  spawnDaemon(socketPath, configPath);
   await waitForDaemon(socketPath);
-  return token;
 }
 
 export async function requestDaemon(configPath, request) {
   const socketPath = getSocketPath(configPath);
-  const tokenPath = getTokenPath(configPath);
-  const token = await ensureDaemon(socketPath, configPath, tokenPath);
+  await ensureDaemon(socketPath, configPath);
   const socket = await connectSocket(socketPath);
   socket.setEncoding("utf8");
 
@@ -148,6 +128,6 @@ export async function requestDaemon(configPath, request) {
         settle(reject, new Error("SSH 缓存进程提前关闭连接"));
       }
     });
-    socket.write(`${JSON.stringify({ ...request, token })}\n`);
+    socket.write(`${JSON.stringify(request)}\n`);
   });
 }

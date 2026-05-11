@@ -20,28 +20,21 @@ let exitTimer;
 let server;
 let socketPath;
 let boundConfigPath;
-let daemonToken;
 
 function parseArgs(argv) {
   const socketIndex = argv.indexOf("--socket");
   const configIndex = argv.indexOf("--config");
-  const tokenFileIndex = argv.indexOf("--token-file");
   const parsedSocketPath = socketIndex === -1 ? undefined : argv[socketIndex + 1];
   const configPath = configIndex === -1 ? undefined : argv[configIndex + 1];
-  const tokenFilePath = tokenFileIndex === -1 ? undefined : argv[tokenFileIndex + 1];
   if (!parsedSocketPath) {
     throw new Error("daemon 缺少 --socket 参数");
   }
   if (!configPath) {
     throw new Error("daemon 缺少 --config 参数");
   }
-  if (!tokenFilePath) {
-    throw new Error("daemon 缺少 --token-file 参数");
-  }
   return {
     socketPath: parsedSocketPath,
-    configPath: path.resolve(configPath),
-    tokenFilePath: path.resolve(tokenFilePath)
+    configPath: path.resolve(configPath)
   };
 }
 
@@ -156,9 +149,6 @@ async function runSerialized(entry, operation) {
 }
 
 async function executeRequest(request) {
-  if (request.token !== daemonToken) {
-    throw new Error("SSH 缓存进程认证失败");
-  }
   const requestConfigPath = path.resolve(request.configPath);
   if (requestConfigPath !== boundConfigPath) {
     throw new Error("SSH 缓存进程拒绝访问非绑定配置文件");
@@ -246,7 +236,6 @@ try {
   const parsedArgs = parseArgs(process.argv.slice(2));
   socketPath = parsedArgs.socketPath;
   boundConfigPath = parsedArgs.configPath;
-  daemonToken = fs.readFileSync(parsedArgs.tokenFilePath, "utf8").trim();
   unlinkSocketPath(socketPath);
   server = net.createServer(handleSocket);
   server.listen(socketPath, () => {
