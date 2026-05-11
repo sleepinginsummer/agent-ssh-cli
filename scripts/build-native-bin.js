@@ -28,7 +28,6 @@ function run(command, args) {
   const result = spawnSync(command, args, {
     cwd: projectRoot,
     stdio: "inherit",
-    shell: process.platform === "win32"
   });
   if (result.error) {
     throw result.error;
@@ -42,7 +41,9 @@ const cargoArgs = ["build", "--release", "--manifest-path", "native/Cargo.toml"]
 if (targetTriple) {
   cargoArgs.push("--target", targetTriple);
 }
-run("cargo", cargoArgs);
+if (process.env.SKIP_CARGO_BUILD !== "1") {
+  run("cargo", cargoArgs);
+}
 
 const source = targetTriple
   ? path.join(projectRoot, "native", "target", targetTriple, "release", executableName)
