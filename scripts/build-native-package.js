@@ -34,6 +34,10 @@ const pkg = {
   version,
   description: `agent-ssh-cli native binary for ${platform}-${arch}`,
   license: "MIT",
+  repository: {
+    type: "git",
+    url: "https://github.com/sleepinginsummer/agent-ssh-cli"
+  },
   os: [osMap[platform]],
   cpu: [cpuMap[arch]],
   files: ["bin/"],

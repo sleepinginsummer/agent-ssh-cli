@@ -3,6 +3,10 @@
   "version": "0.2.4",
   "description": "agent-ssh-cli native binary for darwin-arm64",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sleepinginsummer/agent-ssh-cli"
+  },
   "os": [
     "darwin"
   ],
@@ -12,10 +16,6 @@
   "files": [
     "bin/"
   ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/sleepinginsummer/agent-ssh-cli.git"
-  },
   "publishConfig": {
     "access": "public"
   }
