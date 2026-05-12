@@ -1,11 +1,15 @@
 {
   "name": "agent-ssh-cli",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "基于 CLI 的 SSH 代理工具，按 ssh-mcp-server 的能力一一映射",
   "type": "module",
   "engines": {
     "node": ">=18",
     "npm": ">=8"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sleepinginsummer/agent-ssh-cli.git"
   },
   "files": [
     "bin/",
@@ -23,10 +27,10 @@
     "build:native-package": "npm run build:native-bin && node scripts/build-native-package.js"
   },
   "optionalDependencies": {
-    "@agent-ssh-cli/darwin-arm64": "0.2.2",
-    "@agent-ssh-cli/darwin-x64": "0.2.2",
-    "@agent-ssh-cli/linux-arm64": "0.2.2",
-    "@agent-ssh-cli/linux-x64": "0.2.2",
-    "@agent-ssh-cli/win32-x64": "0.2.2"
+    "@agent-ssh-cli/darwin-arm64": "0.2.3",
+    "@agent-ssh-cli/darwin-x64": "0.2.3",
+    "@agent-ssh-cli/linux-arm64": "0.2.3",
+    "@agent-ssh-cli/linux-x64": "0.2.3",
+    "@agent-ssh-cli/win32-x64": "0.2.3"
   }
 }

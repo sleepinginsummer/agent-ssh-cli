@@ -1,6 +1,6 @@
 {
   "name": "@agent-ssh-cli/linux-x64",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "agent-ssh-cli native binary for linux-x64",
   "license": "MIT",
   "os": [
@@ -12,6 +12,10 @@
   "files": [
     "bin/"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sleepinginsummer/agent-ssh-cli.git"
+  },
   "publishConfig": {
     "access": "public"
   }
