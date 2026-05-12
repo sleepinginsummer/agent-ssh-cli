@@ -5,3 +5,6 @@ ssh-config.json
 config.json
 native/target/
 native-bin/
+
+npm/*/bin/
+npm/*/*.tgz
