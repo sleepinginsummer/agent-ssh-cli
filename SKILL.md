@@ -119,6 +119,8 @@ npm test
 - `--no-cache`: 跳过 Rust daemon 连接缓存，本次命令独立建立并关闭连接
 - `--cache-ttl <ms>`: 设置 Rust daemon 连接缓存空闲毫秒数，默认 `180000`
 
+缓存参数属于子命令级参数，必须放在 `exec`、`upload`、`download` 后、连接名或 `--connection` 前。放在命令末尾会被当作未知参数。
+
 ## list
 
 列出配置中的服务器。
@@ -160,12 +162,15 @@ agentsshcli list --json
 
 ```bash
 agentsshcli exec "<connectionName>" "<command>"
+agentsshcli exec --no-cache "<connectionName>" "<command>"
+agentsshcli exec --cache-ttl 60000 "<connectionName>" "<command>"
 ```
 
 命名参数形式：
 
 ```bash
 agentsshcli exec --connection "<connectionName>" --command "<command>" --directory "/root" --timeout 5000
+agentsshcli exec --no-cache --connection "<connectionName>" --command "<command>"
 ```
 
 参数：
@@ -176,8 +181,8 @@ agentsshcli exec --connection "<connectionName>" --command "<command>" --directo
 - `--command <command>`: 远端命令
 - `--directory <dir>`, `-d <dir>`: 远端工作目录
 - `--timeout <ms>`, `-t <ms>`: 超时毫秒值，默认 `30000`
-- `--no-cache`: 不复用连接
-- `--cache-ttl <ms>`: 连接缓存空闲毫秒数
+- `--no-cache`: 不复用连接，必须放在连接名或 `--connection` 前
+- `--cache-ttl <ms>`: 连接缓存空闲毫秒数，必须放在连接名或 `--connection` 前
 
 返回值：
 
@@ -194,12 +199,14 @@ agentsshcli exec --connection "<connectionName>" --command "<command>" --directo
 
 ```bash
 agentsshcli upload "<connectionName>" "<localPath>" "<remotePath>"
+agentsshcli upload --no-cache "<connectionName>" "<localPath>" "<remotePath>"
 ```
 
 命名参数形式：
 
 ```bash
 agentsshcli upload --connection "<connectionName>" --local "./tmp/upload.txt" --remote "/usr/local/test/upload.txt"
+agentsshcli upload --no-cache --connection "<connectionName>" --local "./tmp/upload.txt" --remote "/usr/local/test/upload.txt"
 ```
 
 参数：
@@ -210,8 +217,8 @@ agentsshcli upload --connection "<connectionName>" --local "./tmp/upload.txt" --
 - `--connection <name>`, `-c <name>`: 连接名
 - `--local <path>`, `-l <path>`: 本地文件路径
 - `--remote <path>`, `-r <path>`: 远端目标文件路径
-- `--no-cache`: 不复用连接
-- `--cache-ttl <ms>`: 连接缓存空闲毫秒数
+- `--no-cache`: 不复用连接，必须放在连接名或 `--connection` 前
+- `--cache-ttl <ms>`: 连接缓存空闲毫秒数，必须放在连接名或 `--connection` 前
 
 返回值：
 
@@ -227,12 +234,14 @@ agentsshcli upload --connection "<connectionName>" --local "./tmp/upload.txt" --
 
 ```bash
 agentsshcli download "<connectionName>" "<remotePath>" "<localPath>"
+agentsshcli download --no-cache "<connectionName>" "<remotePath>" "<localPath>"
 ```
 
 命名参数形式：
 
 ```bash
 agentsshcli download --connection "<connectionName>" --remote "/usr/local/test/upload.txt" --local "./tmp/download.txt"
+agentsshcli download --no-cache --connection "<connectionName>" --remote "/usr/local/test/upload.txt" --local "./tmp/download.txt"
 ```
 
 参数：
@@ -243,8 +252,8 @@ agentsshcli download --connection "<connectionName>" --remote "/usr/local/test/u
 - `--connection <name>`, `-c <name>`: 连接名
 - `--remote <path>`, `-r <path>`: 远端文件路径
 - `--local <path>`, `-l <path>`: 本地目标文件路径
-- `--no-cache`: 不复用连接
-- `--cache-ttl <ms>`: 连接缓存空闲毫秒数
+- `--no-cache`: 不复用连接，必须放在连接名或 `--connection` 前
+- `--cache-ttl <ms>`: 连接缓存空闲毫秒数，必须放在连接名或 `--connection` 前
 
 返回值：
 
@@ -272,6 +281,7 @@ agentsshcli --version
 
 - 参数重复时失败
 - 命名参数和位置参数不能混用同一字段
+- `--no-cache` 和 `--cache-ttl` 必须放在 `exec`、`upload`、`download` 后、连接名或 `--connection` 前
 - `timeout` 和 `cache-ttl` 必须是正整数毫秒值
 - `list` 不接受位置参数
 - `upload` / `download` 的本地路径必须位于当前工作目录、项目目录或 `allowedLocalPaths` 内
