@@ -51,10 +51,7 @@ Please read https://github.com/sleepinginsummer/agent-ssh-cli/blob/main/AI_INSTA
 - Node.js `>= 18`
 - npm `>= 8`
 - Local network access to the target SSH server
-- SSH service enabled on the target server
 - If private key authentication is used, the private key file must be readable by the current user
-- The runtime has been migrated to Rust while npm remains the installation entry
-- `agentsshcli exec/upload/download` use the Rust daemon connection cache by default, and can still run directly with `--no-cache`
 - Prebuilt platform packages support macOS arm64/x64, Linux x64/arm64, and Windows x64
 
 ### Installation Steps
@@ -69,44 +66,6 @@ agentsshcli --help
 2. Import SKILL.md:
 
 Open [SKILL.md](SKILL.md) and add it to the agent.
-
-### Local development build
-
-The package keeps the npm command entry, while the actual runtime uses a Rust native binary. When installing from source, build the native binary first:
-
-```bash
-npm run build:native
-npm run build:native-bin
-npm run build:native-package
-npm test
-```
-
-Execution path:
-
-```text
-agentsshcli command
-  -> bin/agentsshcli.js
-  -> native/target/release/agentsshcli-native
-```
-
-Implemented in Rust:
-
-- `agentsshcli list`
-- `agentsshcli init-config`
-- `agentsshcli exec ...` / `agentsshcli exec --no-cache ...`
-- `agentsshcli upload ...` / `agentsshcli upload --no-cache ...`
-- `agentsshcli download ...` / `agentsshcli download --no-cache ...`
-- Rust daemon connection cache and `--cache-ttl`
-
-Before publishing the npm package, generate the prebuilt binary and platform package for the target platform, then inspect the package contents:
-
-```bash
-npm run build:native-package
-npm pack --dry-run
-(cd npm/darwin-arm64 && npm pack --dry-run)
-```
-
-The publish layout is the main `agent-ssh-cli` package plus optional platform packages: `@agent-ssh-cli/darwin-arm64`, `@agent-ssh-cli/darwin-x64`, `@agent-ssh-cli/linux-x64`, `@agent-ssh-cli/linux-arm64`, and `@agent-ssh-cli/win32-x64`. Prebuilt binaries use this layout: `native-bin/<platform>-<arch>/agentsshcli-native`; Windows uses `agentsshcli-native.exe`.
 
 ## Configuration
 

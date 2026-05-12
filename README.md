@@ -12,7 +12,7 @@
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white" alt="Node.js >=18"></a>
   <a href="https://www.npmjs.com/"><img src="https://img.shields.io/badge/npm-%3E%3D8-CB3837?logo=npm&logoColor=white" alt="npm >=8"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli"><img src="https://img.shields.io/badge/Windows-macOS-Linux-0078D6?labelColor=0078D6&color=C0C0C0" alt="Windows/macOS/Linux"></a>
-  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.2.2-blue" alt="release v0.2.2"></a>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.2.1-blue" alt="release v0.2.1"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
 </p>
 
@@ -50,10 +50,7 @@
 - Node.js `>= 18`
 - npm `>= 8`
 - 本机网络可访问目标 SSH 服务器
-- 目标服务器已开启 SSH 服务
 - 如使用私钥认证，私钥文件需对当前用户可读
-- 当前版本内部执行器已迁移到 Rust，npm 仍作为安装入口
-- `agentsshcli exec/upload/download` 默认使用 Rust daemon 连接缓存，也可以通过 `--no-cache` 直连
 - 预编译平台包支持 macOS arm64/x64、Linux x64/arm64、Windows x64
 
 ### 安装步骤
@@ -69,43 +66,6 @@ agentsshcli --help
 
 打开 [SKILL.md](SKILL.md)，将其添加到 agent 中。
 
-### 本地开发构建
-
-当前仓库保留 npm 安装入口，实际执行逻辑由 Rust 原生二进制完成。开发或源码安装时需要先构建原生二进制：
-
-```bash
-npm run build:native
-npm run build:native-bin
-npm run build:native-package
-npm test
-```
-
-执行链路：
-
-```text
-agentsshcli 命令
-  -> bin/agentsshcli.js
-  -> native/target/release/agentsshcli-native
-```
-
-已由 Rust 实现：
-
-- `agentsshcli list`
-- `agentsshcli init-config`
-- `agentsshcli exec ...` / `agentsshcli exec --no-cache ...`
-- `agentsshcli upload ...` / `agentsshcli upload --no-cache ...`
-- `agentsshcli download ...` / `agentsshcli download --no-cache ...`
-- Rust daemon 连接缓存与 `--cache-ttl`
-
-发布 npm 包前先生成对应平台的预编译产物和平台子包，并检查包内容：
-
-```bash
-npm run build:native-package
-npm pack --dry-run
-(cd npm/darwin-arm64 && npm pack --dry-run)
-```
-
-发布形态为主包 `agent-ssh-cli` 加平台 optional 子包：`@agent-ssh-cli/darwin-arm64`、`@agent-ssh-cli/darwin-x64`、`@agent-ssh-cli/linux-x64`、`@agent-ssh-cli/linux-arm64`、`@agent-ssh-cli/win32-x64`。预编译产物目录格式：`native-bin/<platform>-<arch>/agentsshcli-native`，Windows 文件名为 `agentsshcli-native.exe`。
 
 ## 配置
 
@@ -180,16 +140,12 @@ AGENT_SSH_CONFIG=/path/to/config.json
   }
 ]
 ```
-
-
-
 测试命令
 
 ```bash
 agentsshcli list
 agentsshcli exec --no-cache 密码服务器 "pwd"
 ```
-
 完成安装!
 
 ## 卸载和清理
