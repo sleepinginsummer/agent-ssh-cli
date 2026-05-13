@@ -1117,8 +1117,24 @@ async fn connect_russh(connection: &Connection) -> AppResult<client::Handle<Russ
         inactivity_timeout: Some(Duration::from_secs(30)),
         preferred: Preferred {
             kex: Cow::Owned(vec![
+                russh::kex::CURVE25519,
                 russh::kex::CURVE25519_PRE_RFC_8731,
+                russh::kex::DH_GEX_SHA256,
+                russh::kex::DH_G14_SHA256,
+                // 现代算法优先，旧 DH 算法仅作为兼容历史 OpenSSH 服务端的最后兜底。
+                russh::kex::DH_G14_SHA1,
+                russh::kex::DH_GEX_SHA1,
+                russh::kex::DH_G1_SHA1,
                 russh::kex::EXTENSION_SUPPORT_AS_CLIENT,
+            ]),
+            mac: Cow::Owned(vec![
+                russh::mac::HMAC_SHA512_ETM,
+                russh::mac::HMAC_SHA256_ETM,
+                russh::mac::HMAC_SHA512,
+                russh::mac::HMAC_SHA256,
+                // 旧 MAC 仅作为兼容历史 OpenSSH 服务端的最后兜底。
+                russh::mac::HMAC_SHA1_ETM,
+                russh::mac::HMAC_SHA1,
             ]),
             ..Default::default()
         },

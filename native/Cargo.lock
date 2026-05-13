@@ -80,7 +80,7 @@ dependencies = [
 
 [[package]]
 name = "agentsshcli-native"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "interprocess",
  "libc",
