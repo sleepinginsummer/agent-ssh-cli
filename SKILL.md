@@ -138,7 +138,7 @@ agentsshcli list --json
 返回值：
 
 - 成功时 stdout 输出服务器数组，只包含 `name`、`host`、`port`、`username`
-- 不输出密码、私钥、agent、黑白名单等敏感或控制字段
+- 不输出密码、私钥、passphrase、黑白名单等敏感或控制字段
 - 退出码为 `0`
 
 示例输出：
@@ -164,6 +164,8 @@ agentsshcli list --json
 agentsshcli exec "<connectionName>" "<command>"
 agentsshcli exec --no-cache "<connectionName>" "<command>"
 agentsshcli exec --cache-ttl 60000 "<connectionName>" "<command>"
+agentsshcli exec --pty "<connectionName>" "<command>"
+agentsshcli exec --no-pty "<connectionName>" "<command>"
 ```
 
 命名参数形式：
@@ -183,6 +185,8 @@ agentsshcli exec --no-cache --connection "<connectionName>" --command "<command>
 - `--command-file <path>`: 从本地 UTF-8 文件读取远端命令，适合执行多行脚本，不能和 `--command` 或位置参数 `<command>` 同时使用
 - `--directory <dir>`, `-d <dir>`: 远端工作目录
 - `--timeout <ms>`, `-t <ms>`: 超时毫秒值，默认 `30000`
+- `--pty`: 本次命令分配伪终端，优先级高于配置文件
+- `--no-pty`: 本次命令不分配伪终端，优先级高于配置文件
 - `--no-cache`: 不复用连接，必须放在连接名或 `--connection` 前
 - `--cache-ttl <ms>`: 连接缓存空闲毫秒数，必须放在连接名或 `--connection` 前
 

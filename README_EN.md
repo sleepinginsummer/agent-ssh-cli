@@ -12,7 +12,7 @@ Remote exec · File upload · File download · Connection config · Command whit
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white" alt="Node.js >=18"></a>
   <a href="https://www.npmjs.com/"><img src="https://img.shields.io/badge/npm-%3E%3D8-CB3837?logo=npm&logoColor=white" alt="npm >=8"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli"><img src="https://img.shields.io/badge/sys-win%2Fmac%2Flinux-0078D6" alt="sys win/mac/linux"></a>
-  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.2.5-blue" alt="release v0.2.5"></a>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.2.6-blue" alt="release v0.2.6"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
 </p>
 
@@ -87,10 +87,10 @@ The configuration file is an array, and each item represents one server:
 - `name`: Connection name, must be unique
 - `host`: SSH host address
 - `username`: SSH username
-- `password` / `privateKey` / `agent`: Authentication method; exactly one of the three must be configured
+- `password` / `privateKey`: Authentication method; exactly one of the two must be configured
 - `port`: SSH port, defaults to `22`
 - `passphrase`: Private key passphrase, only used with `privateKey`
-- `pty`: Whether to allocate a pseudo-terminal, defaults to `true`
+- `pty`: Whether to allocate a pseudo-terminal, defaults to `false`; it can also be enabled per command with `exec --pty`
 - `allowedLocalPaths`: Extra local paths allowed for upload or download writes
 - `commandWhitelist`: Command whitelist regular expression array
 - `commandBlacklist`: Command blacklist regular expression array
@@ -146,6 +146,7 @@ Test command
 ```bash
 agentsshcli list
 agentsshcli exec --no-cache password-server "pwd"
+agentsshcli exec --pty password-server "tty"
 agentsshcli exec password-server --command-file ./script.sh --timeout 60000
 ```
 

@@ -8,3 +8,4 @@ native-bin/
 
 npm/*/bin/
 npm/*/*.tgz
+task.md

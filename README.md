@@ -12,7 +12,7 @@
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white" alt="Node.js >=18"></a>
   <a href="https://www.npmjs.com/"><img src="https://img.shields.io/badge/npm-%3E%3D8-CB3837?logo=npm&logoColor=white" alt="npm >=8"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli"><img src="https://img.shields.io/badge/sys-win%2Fmac%2Flinux-0078D6" alt="sys win/mac/linux"></a>
-  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.2.5-blue" alt="release v0.2.5"></a>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.2.6-blue" alt="release v0.2.6"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
 </p>
 
@@ -88,10 +88,10 @@ AGENT_SSH_CONFIG=/path/to/config.json
 - `name`: 连接名，必须唯一
 - `host`: SSH 主机地址
 - `username`: SSH 用户名
-- `password` / `privateKey` / `agent`: 认证方式，三者必须且只能配置一个
+- `password` / `privateKey`: 认证方式，二者必须且只能配置一个
 - `port`: SSH 端口，默认 `22`
 - `passphrase`: 私钥口令，仅配合 `privateKey` 使用
-- `pty`: 是否分配伪终端，默认 `true`
+- `pty`: 是否分配伪终端，默认 `false`，也可通过 `exec --pty` 临时开启
 - `allowedLocalPaths`: 额外允许上传或下载写入的本地路径
 - `commandWhitelist`: 命令白名单正则数组
 - `commandBlacklist`: 命令黑名单正则数组
@@ -146,6 +146,7 @@ AGENT_SSH_CONFIG=/path/to/config.json
 ```bash
 agentsshcli list
 agentsshcli exec --no-cache 密码服务器 "pwd"
+agentsshcli exec --pty 密码服务器 "tty"
 agentsshcli exec 密码服务器 --command-file ./script.sh --timeout 60000
 ```
 完成安装!

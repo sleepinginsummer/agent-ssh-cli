@@ -5,15 +5,15 @@ use interprocess::local_socket::{
 use regex::Regex;
 use russh::keys::{load_secret_key, PrivateKeyWithHashAlg};
 use russh::{client, ChannelMsg, Disconnect, Preferred};
+use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use ssh2::Session;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{IpAddr, TcpStream};
+use std::net::IpAddr;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
@@ -21,7 +21,8 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use url::Url;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -34,8 +35,8 @@ const DAEMON_REQUEST_TIMEOUT_MS: u64 = 86_400_000;
 const HELP_AGENTSSHCLI: &str = r#"
 用法:
   agentsshcli list [--config <path>] [--json]
-  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] <connectionName> <command>
-  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] --connection <name> (--command <command>|--command-file <path>) [--directory <dir>] [--timeout <ms>]
+  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] [--pty|--no-pty] <connectionName> <command>
+  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] [--pty|--no-pty] --connection <name> (--command <command>|--command-file <path>) [--directory <dir>] [--timeout <ms>]
   agentsshcli upload [--config <path>] [--no-cache] [--cache-ttl <ms>] <connectionName> <localPath> <remotePath>
   agentsshcli upload [--config <path>] [--no-cache] [--cache-ttl <ms>] --connection <name> --local <path> --remote <path>
   agentsshcli download [--config <path>] [--no-cache] [--cache-ttl <ms>] <connectionName> <remotePath> <localPath>
@@ -46,7 +47,7 @@ const HELP_AGENTSSHCLI: &str = r#"
   agentsshcli --version
 
 说明:
-  agent-ssh-cli Rust 原生入口。exec/upload/download 默认使用 daemon 缓存，可通过 --no-cache 直连。
+  agent-ssh-cli Rust 原生入口。当前 SSH 操作使用 russh 直连，缓存参数保留用于兼容旧脚本。
 "#;
 
 const HELP_LIST: &str = r#"
@@ -61,13 +62,13 @@ const HELP_LIST: &str = r#"
 
 const HELP_EXEC: &str = r#"
 用法:
-  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] <connectionName> <command>
-  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] --connection <name> (--command <command>|--command-file <path>) [--directory <dir>] [--timeout <ms>]
+  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] [--pty|--no-pty] <connectionName> <command>
+  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] [--pty|--no-pty] --connection <name> (--command <command>|--command-file <path>) [--directory <dir>] [--timeout <ms>]
   agentsshcli help exec
   agentsshcli --version
 
 说明:
-  在远端执行命令。默认使用 daemon 缓存，可通过 --no-cache 直连。
+  在远端执行命令。默认不分配伪终端，可通过 --pty 临时开启。
 "#;
 
 const HELP_UPLOAD: &str = r#"
@@ -123,12 +124,6 @@ impl From<serde_json::Error> for AppError {
     }
 }
 
-impl From<ssh2::Error> for AppError {
-    fn from(error: ssh2::Error) -> Self {
-        Self::new(error.to_string())
-    }
-}
-
 impl From<url::ParseError> for AppError {
     fn from(error: url::ParseError) -> Self {
         Self::new(error.to_string())
@@ -145,7 +140,6 @@ struct RawConnection {
     password: Option<String>,
     private_key: Option<String>,
     passphrase: Option<String>,
-    agent: Option<String>,
     socks_proxy: Option<String>,
     pty: Option<bool>,
     allowed_local_paths: Option<Vec<String>>,
@@ -167,7 +161,6 @@ struct Connection {
     password: Option<String>,
     private_key: Option<String>,
     passphrase: Option<String>,
-    agent: Option<String>,
     socks_proxy: Option<String>,
     pty: Option<bool>,
     allowed_local_paths: Vec<String>,
@@ -193,6 +186,7 @@ struct ExecuteArgs {
     command_file: Option<String>,
     directory: Option<String>,
     timeout_ms: u64,
+    pty: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -406,14 +400,13 @@ fn normalize_entry(entry: RawConnection, index: usize) -> AppResult<Connection> 
     }
     let has_password = is_non_empty(&entry.password);
     let has_private_key = is_non_empty(&entry.private_key);
-    let has_agent = is_non_empty(&entry.agent);
-    let auth_count = [has_password, has_private_key, has_agent]
+    let auth_count = [has_password, has_private_key]
         .iter()
         .filter(|item| **item)
         .count();
     if auth_count == 0 {
         return Err(AppError::new(format!(
-            "ssh-config.json 第 {} 项必须配置 password、privateKey 或 agent 其中之一",
+            "ssh-config.json 第 {} 项必须配置 password 或 privateKey 其中之一",
             index + 1
         )));
     }
@@ -451,7 +444,6 @@ fn normalize_entry(entry: RawConnection, index: usize) -> AppResult<Connection> 
         password: entry.password.filter(|_| has_password),
         private_key: entry.private_key.filter(|_| has_private_key),
         passphrase: entry.passphrase,
-        agent: entry.agent.filter(|_| has_agent),
         socks_proxy: entry.socks_proxy,
         pty: entry.pty,
         allowed_local_paths: ensure_string_array(
@@ -486,6 +478,36 @@ fn load_config(config_path: &Path) -> AppResult<Vec<Connection>> {
         }
     }
     Ok(configs)
+}
+
+fn hash_file(path: &Path) -> AppResult<String> {
+    let bytes = fs::read(path)?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfigSnapshot {
+    modified: Option<SystemTime>,
+    len: u64,
+    hash: String,
+}
+
+impl ConfigSnapshot {
+    fn read(path: &Path) -> AppResult<Self> {
+        let metadata = fs::metadata(path)?;
+        Ok(Self {
+            modified: metadata.modified().ok(),
+            len: metadata.len(),
+            hash: hash_file(path)?,
+        })
+    }
+
+    fn metadata_matches(&self, path: &Path) -> AppResult<bool> {
+        let metadata = fs::metadata(path)?;
+        Ok(self.modified == metadata.modified().ok() && self.len == metadata.len())
+    }
 }
 
 fn find_connection<'a>(
@@ -668,6 +690,7 @@ fn parse_execute_args(argv: Vec<String>) -> AppResult<ExecuteArgs> {
             command_file: None,
             directory: None,
             timeout_ms: 30000,
+            pty: None,
         });
     }
     let mut args = global.args.clone();
@@ -676,6 +699,7 @@ fn parse_execute_args(argv: Vec<String>) -> AppResult<ExecuteArgs> {
     let command_file = take_option(&mut args, &["--command-file"])?;
     let directory = take_option(&mut args, &["--directory", "-d"])?;
     let timeout_value = take_option(&mut args, &["--timeout", "-t"])?;
+    let pty = take_bool_flag_pair(&mut args, "--pty", "--no-pty")?;
     let connection_positional = take_positional(&mut args, "connectionName")?;
     let command_positional = take_positional(&mut args, "command")?;
     ensure_no_mixed(&connection_option, &connection_positional, "connectionName")?;
@@ -708,7 +732,44 @@ fn parse_execute_args(argv: Vec<String>) -> AppResult<ExecuteArgs> {
         command_file,
         directory,
         timeout_ms,
+        pty,
     })
+}
+
+fn take_bool_flag_pair(
+    args: &mut Vec<String>,
+    true_name: &str,
+    false_name: &str,
+) -> AppResult<Option<bool>> {
+    let true_count = args
+        .iter()
+        .filter(|item| item.as_str() == true_name)
+        .count();
+    let false_count = args
+        .iter()
+        .filter(|item| item.as_str() == false_name)
+        .count();
+    if true_count > 1 {
+        return Err(AppError::new(format!("参数重复声明: {}", true_name)));
+    }
+    if false_count > 1 {
+        return Err(AppError::new(format!("参数重复声明: {}", false_name)));
+    }
+    if true_count == 1 && false_count == 1 {
+        return Err(AppError::new(format!(
+            "{} 和 {} 只能选择一个",
+            true_name, false_name
+        )));
+    }
+    if let Some(index) = args.iter().position(|item| item == true_name) {
+        args.remove(index);
+        return Ok(Some(true));
+    }
+    if let Some(index) = args.iter().position(|item| item == false_name) {
+        args.remove(index);
+        return Ok(Some(false));
+    }
+    Ok(None)
 }
 
 fn resolve_value(
@@ -810,7 +871,12 @@ fn run_exec(argv: Vec<String>) -> AppResult<()> {
         None => command.clone(),
     };
     let result = if parsed.global.no_cache {
-        execute_remote_command(connection, &remote_command, parsed.timeout_ms)?
+        execute_remote_command(
+            connection,
+            &remote_command,
+            parsed.timeout_ms,
+            resolve_pty(connection, parsed.pty),
+        )?
     } else {
         request_daemon_execute(&parsed, &command)?
     };
@@ -832,7 +898,7 @@ fn run_upload(argv: Vec<String>) -> AppResult<()> {
     let connection = find_connection(&configs, &parsed.connection_name)?;
     if parsed.global.no_cache {
         let local_path = validate_local_path(&configs, &parsed.local_path, &env::current_dir()?)?;
-        upload_file(connection, &local_path, &parsed.remote_path)?;
+        upload_file(connection, &local_path, &parsed.remote_path, 30000)?;
     } else {
         request_daemon_transfer(&parsed, "upload")?;
     }
@@ -855,7 +921,7 @@ fn run_download(argv: Vec<String>) -> AppResult<()> {
         if let Some(parent) = local_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        download_file(connection, &parsed.remote_path, &local_path)?;
+        download_file(connection, &parsed.remote_path, &local_path, 30000)?;
     } else {
         request_daemon_transfer(&parsed, "download")?;
     }
@@ -893,7 +959,7 @@ fn parse_socks_proxy(proxy: &str) -> AppResult<SocksProxy> {
         format!("socks5://{}", proxy)
     };
     let parsed = Url::parse(&value)
-        .map_err(|error| AppError::new(format!("socksProxy 格式非法: {}，{}", proxy, error)))?;
+        .map_err(|error| AppError::new(format!("socksProxy 格式非法: {}", error)))?;
     if parsed.scheme() != "socks5" {
         return Err(AppError::new("socksProxy 仅支持 socks5:// 协议"));
     }
@@ -917,16 +983,19 @@ fn parse_socks_proxy(proxy: &str) -> AppResult<SocksProxy> {
     })
 }
 
-fn read_exact(stream: &mut TcpStream, length: usize) -> AppResult<Vec<u8>> {
+async fn read_exact_async(stream: &mut tokio::net::TcpStream, length: usize) -> AppResult<Vec<u8>> {
     let mut buffer = vec![0_u8; length];
-    stream.read_exact(&mut buffer)?;
+    stream.read_exact(&mut buffer).await?;
     Ok(buffer)
 }
 
-fn authenticate_socks_proxy(stream: &mut TcpStream, proxy: &SocksProxy) -> AppResult<()> {
+async fn authenticate_socks_proxy(
+    stream: &mut tokio::net::TcpStream,
+    proxy: &SocksProxy,
+) -> AppResult<()> {
     let method = if proxy.username.is_some() { 0x02 } else { 0x00 };
-    stream.write_all(&[0x05, 0x01, method])?;
-    let response = read_exact(stream, 2)?;
+    stream.write_all(&[0x05, 0x01, method]).await?;
+    let response = read_exact_async(stream, 2).await?;
     if response[0] != 0x05 {
         return Err(AppError::new("SOCKS5 代理响应版本非法"));
     }
@@ -950,8 +1019,8 @@ fn authenticate_socks_proxy(stream: &mut TcpStream, proxy: &SocksProxy) -> AppRe
     request.extend_from_slice(username);
     request.push(password.len() as u8);
     request.extend_from_slice(password);
-    stream.write_all(&request)?;
-    let auth_response = read_exact(stream, 2)?;
+    stream.write_all(&request).await?;
+    let auth_response = read_exact_async(stream, 2).await?;
     if auth_response[1] != 0x00 {
         return Err(AppError::new("SOCKS5 代理认证失败"));
     }
@@ -982,8 +1051,8 @@ fn encode_target_address(host: &str) -> AppResult<Vec<u8>> {
     Ok(bytes)
 }
 
-fn read_socks_connect_response(stream: &mut TcpStream) -> AppResult<()> {
-    let header = read_exact(stream, 4)?;
+async fn read_socks_connect_response(stream: &mut tokio::net::TcpStream) -> AppResult<()> {
+    let header = read_exact_async(stream, 4).await?;
     if header[0] != 0x05 {
         return Err(AppError::new("SOCKS5 代理响应版本非法"));
     }
@@ -998,59 +1067,36 @@ fn read_socks_connect_response(stream: &mut TcpStream) -> AppResult<()> {
     }
     match header[3] {
         0x01 => {
-            read_exact(stream, 4)?;
+            read_exact_async(stream, 4).await?;
         }
         0x04 => {
-            read_exact(stream, 16)?;
+            read_exact_async(stream, 16).await?;
         }
         0x03 => {
-            let len = read_exact(stream, 1)?[0] as usize;
-            read_exact(stream, len)?;
+            let len = read_exact_async(stream, 1).await?[0] as usize;
+            read_exact_async(stream, len).await?;
         }
         _ => return Err(AppError::new("SOCKS5 代理响应地址类型非法")),
     }
-    read_exact(stream, 2)?;
+    read_exact_async(stream, 2).await?;
     Ok(())
 }
 
-fn connect_socks_proxy(connection: &Connection) -> AppResult<TcpStream> {
+async fn connect_socks_proxy(connection: &Connection) -> AppResult<tokio::net::TcpStream> {
     let proxy = parse_socks_proxy(
         connection
             .socks_proxy
             .as_deref()
             .ok_or_else(|| AppError::new("缺少 socksProxy 配置"))?,
     )?;
-    let mut stream = TcpStream::connect((proxy.host.as_str(), proxy.port))?;
-    authenticate_socks_proxy(&mut stream, &proxy)?;
+    let mut stream = tokio::net::TcpStream::connect((proxy.host.as_str(), proxy.port)).await?;
+    authenticate_socks_proxy(&mut stream, &proxy).await?;
     let mut request = vec![0x05, 0x01, 0x00];
     request.extend_from_slice(&encode_target_address(&connection.host)?);
     request.extend_from_slice(&connection.port.to_be_bytes());
-    stream.write_all(&request)?;
-    read_socks_connect_response(&mut stream)?;
+    stream.write_all(&request).await?;
+    read_socks_connect_response(&mut stream).await?;
     Ok(stream)
-}
-
-fn read_private_key_file(connection: &Connection, private_key: &str) -> AppResult<String> {
-    fs::read_to_string(private_key).map_err(|error| {
-        AppError::new(format!(
-            "连接 {} 读取私钥失败: {}，{}",
-            connection.name, private_key, error
-        ))
-    })
-}
-
-fn is_openssh_private_key(private_key_data: &str) -> bool {
-    private_key_data.contains("-----BEGIN OPENSSH PRIVATE KEY-----")
-}
-
-fn connection_uses_openssh_private_key(connection: &Connection) -> AppResult<bool> {
-    let Some(private_key) = connection.private_key.as_deref() else {
-        return Ok(false);
-    };
-    Ok(is_openssh_private_key(&read_private_key_file(
-        connection,
-        private_key,
-    )?))
 }
 
 struct RusshClient;
@@ -1067,14 +1113,6 @@ impl client::Handler for RusshClient {
 }
 
 async fn connect_russh(connection: &Connection) -> AppResult<client::Handle<RusshClient>> {
-    let private_key = connection
-        .private_key
-        .as_deref()
-        .ok_or_else(|| AppError::new(format!("连接 {} 缺少 privateKey 配置", connection.name)))?;
-    let key_pair =
-        load_secret_key(private_key, connection.passphrase.as_deref()).map_err(|error| {
-            AppError::new(format!("连接 {} 加载私钥失败: {}", connection.name, error))
-        })?;
     let config = client::Config {
         inactivity_timeout: Some(Duration::from_secs(30)),
         preferred: Preferred {
@@ -1086,29 +1124,64 @@ async fn connect_russh(connection: &Connection) -> AppResult<client::Handle<Russ
         },
         ..Default::default()
     };
-    let mut session = client::connect(
-        Arc::new(config),
-        (connection.host.as_str(), connection.port),
-        RusshClient,
-    )
-    .await
-    .map_err(|error| AppError::new(format!("连接 {} 建立 SSH 失败: {}", connection.name, error)))?;
+    let stream = if connection.socks_proxy.is_some() {
+        connect_socks_proxy(connection).await?
+    } else {
+        tokio::net::TcpStream::connect((connection.host.as_str(), connection.port)).await?
+    };
+    let mut session = client::connect_stream(Arc::new(config), stream, RusshClient)
+        .await
+        .map_err(|error| {
+            AppError::new(format!("连接 {} 建立 SSH 失败: {}", connection.name, error))
+        })?;
+    authenticate_russh(connection, &mut session).await?;
+    Ok(session)
+}
+
+async fn authenticate_russh(
+    connection: &Connection,
+    session: &mut client::Handle<RusshClient>,
+) -> AppResult<()> {
+    if let Some(password) = connection.password.as_deref() {
+        let auth = session
+            .authenticate_password(connection.username.clone(), password.to_string())
+            .await
+            .map_err(|error| {
+                AppError::new(format!("连接 {} 密码认证失败: {}", connection.name, error))
+            })?;
+        if !auth.success() {
+            return Err(AppError::new(format!(
+                "连接 {} 密码认证被拒绝",
+                connection.name
+            )));
+        }
+        return Ok(());
+    }
+    let private_key = connection
+        .private_key
+        .as_deref()
+        .ok_or_else(|| AppError::new(format!("连接 {} 缺少认证配置", connection.name)))?;
+    let key_pair =
+        load_secret_key(private_key, connection.passphrase.as_deref()).map_err(|error| {
+            AppError::new(format!(
+                "连接 {} 加载私钥失败: {}，{}",
+                connection.name, private_key, error
+            ))
+        })?;
+    let hash_alg = session
+        .best_supported_rsa_hash()
+        .await
+        .map_err(|error| {
+            AppError::new(format!(
+                "连接 {} 协商 RSA hash 失败: {}",
+                connection.name, error
+            ))
+        })?
+        .flatten();
     let auth = session
         .authenticate_publickey(
             connection.username.clone(),
-            PrivateKeyWithHashAlg::new(
-                Arc::new(key_pair),
-                session
-                    .best_supported_rsa_hash()
-                    .await
-                    .map_err(|error| {
-                        AppError::new(format!(
-                            "连接 {} 协商 RSA hash 失败: {}",
-                            connection.name, error
-                        ))
-                    })?
-                    .flatten(),
-            ),
+            PrivateKeyWithHashAlg::new(Arc::new(key_pair), hash_alg),
         )
         .await
         .map_err(|error| {
@@ -1120,17 +1193,29 @@ async fn connect_russh(connection: &Connection) -> AppResult<client::Handle<Russ
             connection.name
         )));
     }
-    Ok(session)
+    Ok(())
 }
 
-async fn execute_remote_command_with_russh_async(
+async fn execute_remote_command_with_session_async(
+    session: &client::Handle<RusshClient>,
     connection: &Connection,
     remote_command: &str,
+    pty: bool,
 ) -> AppResult<String> {
-    let session = connect_russh(connection).await?;
     let mut channel = session.channel_open_session().await.map_err(|error| {
         AppError::new(format!("连接 {} 打开会话失败: {}", connection.name, error))
     })?;
+    if pty {
+        channel
+            .request_pty(true, "xterm", 80, 24, 0, 0, &[])
+            .await
+            .map_err(|error| {
+                AppError::new(format!(
+                    "连接 {} 分配伪终端失败: {}",
+                    connection.name, error
+                ))
+            })?;
+    }
     channel.exec(true, remote_command).await.map_err(|error| {
         AppError::new(format!("连接 {} 执行命令失败: {}", connection.name, error))
     })?;
@@ -1146,9 +1231,6 @@ async fn execute_remote_command_with_russh_async(
             _ => {}
         }
     }
-    let _ = session
-        .disconnect(Disconnect::ByApplication, "", "English")
-        .await;
     let stdout = String::from_utf8_lossy(&stdout).trim_end().to_string();
     let stderr = String::from_utf8_lossy(&stderr).trim_end().to_string();
     let code = exit_status.unwrap_or(0);
@@ -1166,127 +1248,182 @@ async fn execute_remote_command_with_russh_async(
     Ok(stdout)
 }
 
-fn execute_remote_command_with_russh(
+async fn execute_remote_command_async(
     connection: &Connection,
     remote_command: &str,
+    pty: bool,
 ) -> AppResult<String> {
-    let runtime = tokio::runtime::Runtime::new()
-        .map_err(|error| AppError::new(format!("创建 tokio runtime 失败: {}", error)))?;
-    runtime.block_on(execute_remote_command_with_russh_async(
-        connection,
-        remote_command,
-    ))
-}
-
-fn connect_ssh(connection: &Connection) -> AppResult<Session> {
-    let tcp = if connection.socks_proxy.is_some() {
-        connect_socks_proxy(connection)?
-    } else {
-        TcpStream::connect((connection.host.as_str(), connection.port))?
-    };
-    tcp.set_read_timeout(Some(Duration::from_secs(60)))?;
-    tcp.set_write_timeout(Some(Duration::from_secs(60)))?;
-    let mut session = Session::new()?;
-    session.set_tcp_stream(tcp);
-    session.handshake()?;
-    if let Some(password) = &connection.password {
-        session.userauth_password(&connection.username, password)?;
-    } else if let Some(private_key) = &connection.private_key {
-        session.userauth_pubkey_file(
-            &connection.username,
-            None,
-            Path::new(private_key),
-            connection.passphrase.as_deref(),
-        )?;
-    } else if let Some(agent_path) = &connection.agent {
-        env::set_var("SSH_AUTH_SOCK", agent_path);
-        let mut agent = session.agent()?;
-        agent.connect()?;
-        agent.list_identities()?;
-        let identities = agent.identities()?;
-        let mut authenticated = false;
-        let mut last_error: Option<String> = None;
-        for identity in identities {
-            match agent.userauth(&connection.username, &identity) {
-                Ok(()) => {
-                    authenticated = true;
-                    break;
-                }
-                Err(error) => last_error = Some(error.to_string()),
-            }
-        }
-        if !authenticated {
-            return Err(AppError::new(format!(
-                "SSH agent 认证失败{}",
-                last_error
-                    .map(|item| format!(": {}", item))
-                    .unwrap_or_default()
-            )));
-        }
-    } else {
-        return Err(AppError::new(format!(
-            "连接 {} 缺少可用认证信息",
-            connection.name
-        )));
-    }
-    if !session.authenticated() {
-        return Err(AppError::new("SSH 认证失败"));
-    }
-    Ok(session)
+    let session = connect_russh(connection).await?;
+    let result =
+        execute_remote_command_with_session_async(&session, connection, remote_command, pty).await;
+    let _ = session
+        .disconnect(Disconnect::ByApplication, "", "English")
+        .await;
+    result
 }
 
 fn execute_remote_command(
     connection: &Connection,
     remote_command: &str,
     timeout_ms: u64,
+    pty: bool,
 ) -> AppResult<String> {
-    if connection_uses_openssh_private_key(connection)? {
-        return execute_remote_command_with_russh(connection, remote_command);
-    }
-    let session = connect_ssh(connection)?;
-    // libssh2 的阻塞调用超时用于约束远端命令读写等待，避免命令长期挂起。
-    session.set_timeout(timeout_ms.try_into().unwrap_or(u32::MAX));
-    let mut channel = session.channel_session()?;
-    if connection.pty.unwrap_or(true) {
-        channel.request_pty("xterm", None, None)?;
-    }
-    channel.exec(remote_command)?;
-    let mut stdout = String::new();
-    let mut stderr = String::new();
-    channel.read_to_string(&mut stdout)?;
-    channel.stderr().read_to_string(&mut stderr)?;
-    channel.wait_close()?;
-    let exit_status = channel.exit_status()?;
-    if exit_status != 0 {
-        let mut parts = Vec::new();
-        if !stdout.trim().is_empty() {
-            parts.push(stdout.trim_end().to_string());
-        }
-        if !stderr.trim().is_empty() {
-            parts.push(format!("[stderr]\n{}", stderr.trim_end()));
-        }
-        parts.push(format!("[exit code] {}", exit_status));
-        return Err(AppError::new(parts.join("\n")));
-    }
-    Ok(stdout.trim_end().to_string())
+    run_with_timeout(
+        timeout_ms,
+        execute_remote_command_async(connection, remote_command, pty),
+    )
 }
 
-fn upload_file(connection: &Connection, local_path: &Path, remote_path: &str) -> AppResult<()> {
-    let session = connect_ssh(connection)?;
-    let sftp = session.sftp()?;
-    let mut local_file = fs::File::open(local_path)?;
-    let mut remote_file = sftp.create(Path::new(remote_path))?;
-    std::io::copy(&mut local_file, &mut remote_file)?;
+async fn open_sftp_session(
+    session: &client::Handle<RusshClient>,
+    connection: &Connection,
+) -> AppResult<SftpSession> {
+    let channel = session.channel_open_session().await.map_err(|error| {
+        AppError::new(format!(
+            "连接 {} 打开 SFTP 会话失败: {}",
+            connection.name, error
+        ))
+    })?;
+    channel
+        .request_subsystem(true, "sftp")
+        .await
+        .map_err(|error| {
+            AppError::new(format!(
+                "连接 {} 请求 SFTP 子系统失败: {}",
+                connection.name, error
+            ))
+        })?;
+    SftpSession::new(channel.into_stream())
+        .await
+        .map_err(|error| {
+            AppError::new(format!(
+                "连接 {} 初始化 SFTP 失败: {}",
+                connection.name, error
+            ))
+        })
+}
+
+async fn upload_file_with_session_async(
+    session: &client::Handle<RusshClient>,
+    connection: &Connection,
+    local_path: &Path,
+    remote_path: &str,
+) -> AppResult<()> {
+    let sftp = open_sftp_session(session, connection).await?;
+    let mut local_file = tokio::fs::File::open(local_path).await?;
+    let mut remote_file = sftp
+        .create(remote_path.to_string())
+        .await
+        .map_err(|error| {
+            AppError::new(format!(
+                "连接 {} 创建远端文件失败: {}",
+                connection.name, error
+            ))
+        })?;
+    tokio::io::copy(&mut local_file, &mut remote_file).await?;
+    remote_file.shutdown().await?;
+    let _ = sftp.close().await;
     Ok(())
 }
 
-fn download_file(connection: &Connection, remote_path: &str, local_path: &Path) -> AppResult<()> {
-    let session = connect_ssh(connection)?;
-    let sftp = session.sftp()?;
-    let mut remote_file = sftp.open(Path::new(remote_path))?;
-    let mut local_file = fs::File::create(local_path)?;
-    std::io::copy(&mut remote_file, &mut local_file)?;
+async fn download_file_with_session_async(
+    session: &client::Handle<RusshClient>,
+    connection: &Connection,
+    remote_path: &str,
+    local_path: &Path,
+) -> AppResult<()> {
+    let sftp = open_sftp_session(session, connection).await?;
+    let mut remote_file = sftp.open(remote_path.to_string()).await.map_err(|error| {
+        AppError::new(format!(
+            "连接 {} 打开远端文件失败: {}",
+            connection.name, error
+        ))
+    })?;
+    let mut local_file = tokio::fs::File::create(local_path).await?;
+    tokio::io::copy(&mut remote_file, &mut local_file).await?;
+    local_file.shutdown().await?;
+    let _ = sftp.close().await;
     Ok(())
+}
+
+async fn upload_file_async(
+    connection: &Connection,
+    local_path: &Path,
+    remote_path: &str,
+) -> AppResult<()> {
+    let session = connect_russh(connection).await?;
+    let result =
+        upload_file_with_session_async(&session, connection, local_path, remote_path).await;
+    let _ = session
+        .disconnect(Disconnect::ByApplication, "", "English")
+        .await;
+    result
+}
+
+async fn download_file_async(
+    connection: &Connection,
+    remote_path: &str,
+    local_path: &Path,
+) -> AppResult<()> {
+    let session = connect_russh(connection).await?;
+    let result =
+        download_file_with_session_async(&session, connection, remote_path, local_path).await;
+    let _ = session
+        .disconnect(Disconnect::ByApplication, "", "English")
+        .await;
+    result
+}
+
+fn upload_file(
+    connection: &Connection,
+    local_path: &Path,
+    remote_path: &str,
+    timeout_ms: u64,
+) -> AppResult<()> {
+    run_with_timeout(
+        timeout_ms,
+        upload_file_async(connection, local_path, remote_path),
+    )
+}
+
+fn download_file(
+    connection: &Connection,
+    remote_path: &str,
+    local_path: &Path,
+    timeout_ms: u64,
+) -> AppResult<()> {
+    run_with_timeout(
+        timeout_ms,
+        download_file_async(connection, remote_path, local_path),
+    )
+}
+
+fn run_with_timeout<T, F>(timeout_ms: u64, future: F) -> AppResult<T>
+where
+    F: std::future::Future<Output = AppResult<T>>,
+{
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|error| AppError::new(format!("创建 tokio runtime 失败: {}", error)))?;
+    block_with_timeout(&runtime, timeout_ms, future)
+}
+
+fn block_with_timeout<T, F>(
+    runtime: &tokio::runtime::Runtime,
+    timeout_ms: u64,
+    future: F,
+) -> AppResult<T>
+where
+    F: std::future::Future<Output = AppResult<T>>,
+{
+    runtime.block_on(async {
+        tokio::time::timeout(Duration::from_millis(timeout_ms), future)
+            .await
+            .map_err(|_| AppError::new(format!("操作超时: {} ms", timeout_ms)))?
+    })
+}
+
+fn resolve_pty(connection: &Connection, override_pty: Option<bool>) -> bool {
+    override_pty.or(connection.pty).unwrap_or(false)
 }
 
 fn resolve_execute_command(configs: &[Connection], parsed: &ExecuteArgs) -> AppResult<String> {
@@ -1354,6 +1491,7 @@ mod tests {
     fn parse_exec_supports_named_arguments() {
         let parsed = parse_execute_args(vec![
             "--no-cache".into(),
+            "--pty".into(),
             "--connection".into(),
             "server".into(),
             "--command".into(),
@@ -1365,6 +1503,69 @@ mod tests {
         assert_eq!(parsed.connection_name, "server");
         assert_eq!(parsed.command, "pwd");
         assert_eq!(parsed.timeout_ms, 1000);
+        assert_eq!(parsed.pty, Some(true));
+    }
+
+    #[test]
+    fn parse_exec_rejects_conflicting_pty_flags() {
+        let err = parse_execute_args(vec![
+            "--pty".into(),
+            "--no-pty".into(),
+            "server".into(),
+            "pwd".into(),
+        ])
+        .unwrap_err();
+        assert!(err.to_string().contains("--pty 和 --no-pty"));
+    }
+
+    #[test]
+    fn load_config_rejects_agent_auth() {
+        let (_dir, path) = write_config(
+            r#"[
+              {"name":"a","host":"127.0.0.1","username":"root","agent":"/tmp/agent.sock"}
+            ]"#,
+        );
+        let err = load_config(&path).unwrap_err();
+        assert!(err.to_string().contains("password 或 privateKey"));
+    }
+
+    #[test]
+    fn config_snapshot_detects_metadata_and_hash_changes() {
+        let (_dir, path) =
+            write_config(r#"[{"name":"a","host":"127.0.0.1","username":"root","password":"p"}]"#);
+        let snapshot = ConfigSnapshot::read(&path).unwrap();
+        assert!(snapshot.metadata_matches(&path).unwrap());
+        std::thread::sleep(Duration::from_millis(5));
+        fs::write(
+            &path,
+            r#"[{"name":"b","host":"127.0.0.1","username":"root","password":"p"}]"#,
+        )
+        .unwrap();
+        let changed = ConfigSnapshot::read(&path).unwrap();
+        assert_ne!(snapshot.hash, changed.hash);
+    }
+
+    #[test]
+    fn resolve_pty_prefers_cli_then_config_then_default_false() {
+        let connection = normalize_entry(
+            serde_json::from_str(
+                r#"{"name":"a","host":"127.0.0.1","username":"root","password":"p","pty":true}"#,
+            )
+            .unwrap(),
+            0,
+        )
+        .unwrap();
+        assert!(resolve_pty(&connection, None));
+        assert!(!resolve_pty(&connection, Some(false)));
+        let default_connection = normalize_entry(
+            serde_json::from_str(
+                r#"{"name":"b","host":"127.0.0.1","username":"root","password":"p"}"#,
+            )
+            .unwrap(),
+            0,
+        )
+        .unwrap();
+        assert!(!resolve_pty(&default_connection, None));
     }
 
     #[test]
@@ -1443,6 +1644,7 @@ struct DaemonRequest {
     local_path: Option<String>,
     remote_path: Option<String>,
     cache_ttl_ms: Option<u64>,
+    pty: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1455,9 +1657,35 @@ struct DaemonResponse {
 }
 
 struct PoolEntry {
-    session: Session,
+    session: client::Handle<RusshClient>,
     last_used_at: Instant,
     ttl_ms: u64,
+}
+
+struct DaemonState {
+    runtime: tokio::runtime::Runtime,
+    config_snapshot: ConfigSnapshot,
+    configs: Vec<Connection>,
+    connections: HashMap<String, PoolEntry>,
+}
+
+impl DaemonState {
+    fn new(config_path: &Path) -> AppResult<Self> {
+        Ok(Self {
+            runtime: tokio::runtime::Runtime::new()
+                .map_err(|error| AppError::new(format!("创建 tokio runtime 失败: {}", error)))?,
+            config_snapshot: ConfigSnapshot::read(config_path)?,
+            configs: load_config(config_path)?,
+            connections: HashMap::new(),
+        })
+    }
+
+    fn run_with_timeout<T, F>(&self, timeout_ms: u64, future: F) -> AppResult<T>
+    where
+        F: std::future::Future<Output = AppResult<T>>,
+    {
+        block_with_timeout(&self.runtime, timeout_ms, future)
+    }
 }
 
 fn cache_ttl(global: &GlobalArgs) -> u64 {
@@ -1465,15 +1693,6 @@ fn cache_ttl(global: &GlobalArgs) -> u64 {
 }
 
 fn request_daemon_execute(parsed: &ExecuteArgs, command: &str) -> AppResult<String> {
-    let configs = load_config(&parsed.global.config_path)?;
-    let connection = find_connection(&configs, &parsed.connection_name)?;
-    if connection_uses_openssh_private_key(connection)? {
-        let remote_command = match parsed.directory.as_ref() {
-            Some(directory) => format!("cd -- {} && {}", shell_json_quote(directory)?, command),
-            None => command.to_string(),
-        };
-        return execute_remote_command_with_russh(connection, &remote_command);
-    }
     let config_path = path_absolute(&parsed.global.config_path)?;
     let request = serde_json::json!({
         "operation": "execute",
@@ -1484,6 +1703,7 @@ fn request_daemon_execute(parsed: &ExecuteArgs, command: &str) -> AppResult<Stri
         "directory": parsed.directory,
         "timeout": parsed.timeout_ms,
         "cacheTtlMs": cache_ttl(&parsed.global),
+        "pty": parsed.pty,
     });
     let response = request_daemon(&config_path, &request)?;
     Ok(response.stdout.unwrap_or_default())
@@ -1712,16 +1932,16 @@ fn run_daemon(argv: Vec<String>) -> AppResult<()> {
     let listener = UnixListener::bind(&socket_path)?;
     fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
     let bound_config_path = path_absolute(&config_path)?;
-    let mut connections: HashMap<String, PoolEntry> = HashMap::new();
+    let mut state = DaemonState::new(&bound_config_path)?;
     let mut last_activity_at = Instant::now();
     loop {
-        let wait_ms = next_daemon_wait_ms(&connections, last_activity_at);
+        let wait_ms = next_daemon_wait_ms(&state.connections, last_activity_at);
         listener.set_nonblocking(true)?;
         match listener.accept() {
             Ok((mut stream, _)) => {
                 last_activity_at = Instant::now();
                 let response =
-                    match handle_daemon_stream(&mut stream, &bound_config_path, &mut connections) {
+                    match handle_daemon_stream(&mut stream, &bound_config_path, &mut state) {
                         Ok(response) => response,
                         Err(error) => DaemonResponse {
                             ok: false,
@@ -1732,12 +1952,12 @@ fn run_daemon(argv: Vec<String>) -> AppResult<()> {
                 let line = format!("{}\n", serde_json::to_string(&response)?);
                 stream.write_all(line.as_bytes())?;
                 stream.flush()?;
-                expire_connections(&mut connections);
+                expire_connections(&mut state.connections);
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(wait_ms.min(100)));
-                expire_connections(&mut connections);
-                if connections.is_empty()
+                expire_connections(&mut state.connections);
+                if state.connections.is_empty()
                     && last_activity_at.elapsed() >= Duration::from_millis(DEFAULT_CACHE_TTL_MS)
                 {
                     break;
@@ -1760,14 +1980,14 @@ fn run_daemon(argv: Vec<String>) -> AppResult<()> {
         .map_err(|error| AppError::new(format!("Windows named pipe 名称非法: {}", error)))?;
     let listener = ListenerOptions::new().name(name).create_sync()?;
     let bound_config_path = path_absolute(&config_path)?;
-    let mut connections: HashMap<String, PoolEntry> = HashMap::new();
+    let mut state = DaemonState::new(&bound_config_path)?;
     let mut last_activity_at = Instant::now();
     loop {
         match listener.accept() {
             Ok(mut stream) => {
                 last_activity_at = Instant::now();
                 let response =
-                    match handle_daemon_stream(&mut stream, &bound_config_path, &mut connections) {
+                    match handle_daemon_stream(&mut stream, &bound_config_path, &mut state) {
                         Ok(response) => response,
                         Err(error) => DaemonResponse {
                             ok: false,
@@ -1778,11 +1998,11 @@ fn run_daemon(argv: Vec<String>) -> AppResult<()> {
                 let line = format!("{}\n", serde_json::to_string(&response)?);
                 stream.write_all(line.as_bytes())?;
                 stream.flush()?;
-                expire_connections(&mut connections);
+                expire_connections(&mut state.connections);
             }
             Err(error) => return Err(AppError::new(error.to_string())),
         }
-        if connections.is_empty()
+        if state.connections.is_empty()
             && last_activity_at.elapsed() >= Duration::from_millis(DEFAULT_CACHE_TTL_MS)
         {
             break;
@@ -1841,7 +2061,7 @@ fn expire_connections(connections: &mut HashMap<String, PoolEntry>) {
 fn handle_daemon_stream<S: Read + Write>(
     stream: &mut S,
     bound_config_path: &Path,
-    connections: &mut HashMap<String, PoolEntry>,
+    state: &mut DaemonState,
 ) -> AppResult<DaemonResponse> {
     let line = read_line_from_socket(stream)?;
     let raw_value: serde_json::Value = serde_json::from_str(&line)?;
@@ -1861,8 +2081,8 @@ fn handle_daemon_stream<S: Read + Write>(
     if ttl_ms == 0 {
         return Err(AppError::new("cache-ttl 必须是正整数毫秒值"));
     }
-    let configs = load_config(bound_config_path)?;
-    let connection = find_connection(&configs, &request.connection_name)?.clone();
+    reload_daemon_config_if_changed(bound_config_path, state)?;
+    let connection = find_connection(&state.configs, &request.connection_name)?.clone();
     if request.operation == "execute" {
         let command = request
             .command
@@ -1871,18 +2091,21 @@ fn handle_daemon_stream<S: Read + Write>(
         validate_command(&connection, command)?;
     }
     let key = build_connection_key(bound_config_path, &connection);
-    if !connections.contains_key(&key) {
-        connections.insert(
+    if !state.connections.contains_key(&key) {
+        let session =
+            state.run_with_timeout(request.timeout.unwrap_or(30000), connect_russh(&connection))?;
+        state.connections.insert(
             key.clone(),
             PoolEntry {
-                session: connect_ssh(&connection)?,
+                session,
                 last_used_at: Instant::now(),
                 ttl_ms,
             },
         );
     }
-    let entry = connections
-        .get_mut(&key)
+    let mut entry = state
+        .connections
+        .remove(&key)
         .ok_or_else(|| AppError::new("SSH 缓存连接状态异常"))?;
     entry.ttl_ms = ttl_ms;
     entry.last_used_at = Instant::now();
@@ -1897,12 +2120,22 @@ fn handle_daemon_stream<S: Read + Write>(
                 }
                 None => command,
             };
-            let stdout = execute_remote_command_with_session(
-                &entry.session,
-                &connection,
-                &remote_command,
+            let pty = resolve_pty(&connection, request.pty);
+            let stdout_result = state.run_with_timeout(
                 request.timeout.unwrap_or(30000),
-            )?;
+                execute_remote_command_with_session_async(
+                    &entry.session,
+                    &connection,
+                    &remote_command,
+                    pty,
+                ),
+            );
+            let stdout = match stdout_result {
+                Ok(stdout) => stdout,
+                Err(error) => {
+                    return Err(error);
+                }
+            };
             DaemonResponse {
                 ok: true,
                 message: None,
@@ -1916,8 +2149,13 @@ fn handle_daemon_stream<S: Read + Write>(
             let remote = request
                 .remote_path
                 .ok_or_else(|| AppError::new("daemon upload 缺少 remotePath"))?;
-            let local_path = validate_local_path(&configs, &local, &request.cwd)?;
-            upload_file_with_session(&entry.session, &local_path, &remote)?;
+            let local_path = validate_local_path(&state.configs, &local, &request.cwd)?;
+            if let Err(error) = state.run_with_timeout(
+                request.timeout.unwrap_or(30000),
+                upload_file_with_session_async(&entry.session, &connection, &local_path, &remote),
+            ) {
+                return Err(error);
+            }
             DaemonResponse {
                 ok: true,
                 message: None,
@@ -1931,11 +2169,16 @@ fn handle_daemon_stream<S: Read + Write>(
             let remote = request
                 .remote_path
                 .ok_or_else(|| AppError::new("daemon download 缺少 remotePath"))?;
-            let local_path = validate_local_path(&configs, &local, &request.cwd)?;
+            let local_path = validate_local_path(&state.configs, &local, &request.cwd)?;
             if let Some(parent) = local_path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            download_file_with_session(&entry.session, &remote, &local_path)?;
+            if let Err(error) = state.run_with_timeout(
+                request.timeout.unwrap_or(30000),
+                download_file_with_session_async(&entry.session, &connection, &remote, &local_path),
+            ) {
+                return Err(error);
+            }
             DaemonResponse {
                 ok: true,
                 message: None,
@@ -1950,16 +2193,38 @@ fn handle_daemon_stream<S: Read + Write>(
         }
     };
     entry.last_used_at = Instant::now();
+    state.connections.insert(key, entry);
     Ok(result)
 }
 
+fn reload_daemon_config_if_changed(config_path: &Path, state: &mut DaemonState) -> AppResult<()> {
+    if state.config_snapshot.metadata_matches(config_path)? {
+        return Ok(());
+    }
+    let current_snapshot = ConfigSnapshot::read(config_path)?;
+    if current_snapshot.hash == state.config_snapshot.hash {
+        state.config_snapshot = current_snapshot;
+        return Ok(());
+    }
+    let configs = load_config(config_path)?;
+    state.config_snapshot = current_snapshot;
+    state.configs = configs;
+    state.connections.clear();
+    Ok(())
+}
+
 fn build_connection_key(config_path: &Path, connection: &Connection) -> String {
-    let auth = if let Some(agent) = &connection.agent {
-        format!("agent:{}", agent)
-    } else if let Some(private_key) = &connection.private_key {
-        format!("privateKey:{}:{:?}", private_key, connection.passphrase)
+    let auth = if let Some(private_key) = &connection.private_key {
+        format!(
+            "privateKey:{}:{}",
+            private_key,
+            sensitive_hash(connection.passphrase.as_deref().unwrap_or(""))
+        )
     } else {
-        format!("password:{:?}", connection.password)
+        format!(
+            "password:{}",
+            sensitive_hash(connection.password.as_deref().unwrap_or(""))
+        )
     };
     let raw = format!(
         "{}|{}|{}|{}|{}|{:?}|{}",
@@ -1978,58 +2243,8 @@ fn build_connection_key(config_path: &Path, connection: &Connection) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn execute_remote_command_with_session(
-    session: &Session,
-    connection: &Connection,
-    remote_command: &str,
-    timeout_ms: u64,
-) -> AppResult<String> {
-    session.set_timeout(timeout_ms.try_into().unwrap_or(u32::MAX));
-    let mut channel = session.channel_session()?;
-    if connection.pty.unwrap_or(true) {
-        channel.request_pty("xterm", None, None)?;
-    }
-    channel.exec(remote_command)?;
-    let mut stdout = String::new();
-    let mut stderr = String::new();
-    channel.read_to_string(&mut stdout)?;
-    channel.stderr().read_to_string(&mut stderr)?;
-    channel.wait_close()?;
-    let exit_status = channel.exit_status()?;
-    if exit_status != 0 {
-        let mut parts = Vec::new();
-        if !stdout.trim().is_empty() {
-            parts.push(stdout.trim_end().to_string());
-        }
-        if !stderr.trim().is_empty() {
-            parts.push(format!("[stderr]\n{}", stderr.trim_end()));
-        }
-        parts.push(format!("[exit code] {}", exit_status));
-        return Err(AppError::new(parts.join("\n")));
-    }
-    Ok(stdout.trim_end().to_string())
-}
-
-fn upload_file_with_session(
-    session: &Session,
-    local_path: &Path,
-    remote_path: &str,
-) -> AppResult<()> {
-    let sftp = session.sftp()?;
-    let mut local_file = fs::File::open(local_path)?;
-    let mut remote_file = sftp.create(Path::new(remote_path))?;
-    std::io::copy(&mut local_file, &mut remote_file)?;
-    Ok(())
-}
-
-fn download_file_with_session(
-    session: &Session,
-    remote_path: &str,
-    local_path: &Path,
-) -> AppResult<()> {
-    let sftp = session.sftp()?;
-    let mut remote_file = sftp.open(Path::new(remote_path))?;
-    let mut local_file = fs::File::create(local_path)?;
-    std::io::copy(&mut remote_file, &mut local_file)?;
-    Ok(())
+fn sensitive_hash(value: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
