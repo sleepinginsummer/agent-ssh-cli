@@ -2149,7 +2149,34 @@ fn handle_daemon_stream<S: Read + Write>(
             let stdout = match stdout_result {
                 Ok(stdout) => stdout,
                 Err(error) => {
-                    return Err(error);
+                    let _ = state.run_with_timeout(request.timeout.unwrap_or(30000), async {
+                        entry
+                            .session
+                            .disconnect(Disconnect::ByApplication, "", "English")
+                            .await
+                            .map_err(|error| {
+                                AppError::new(format!("断开失效 SSH 缓存连接失败: {}", error))
+                            })
+                    });
+                    let session = state.run_with_timeout(
+                        request.timeout.unwrap_or(30000),
+                        connect_russh(&connection),
+                    )?;
+                    let stdout = state
+                        .run_with_timeout(
+                            request.timeout.unwrap_or(30000),
+                            execute_remote_command_with_session_async(
+                                &session,
+                                &connection,
+                                &remote_command,
+                                pty,
+                            ),
+                        )
+                        .map_err(|retry_error| {
+                            AppError::new(format!("{}；已重连重试仍失败: {}", error, retry_error))
+                        })?;
+                    entry.session = session;
+                    stdout
                 }
             };
             DaemonResponse {
