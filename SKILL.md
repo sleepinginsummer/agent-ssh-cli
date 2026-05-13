@@ -182,13 +182,31 @@ agentsshcli exec --no-cache --connection "<connectionName>" --command "<command>
 - `<command>`: 远端命令
 - `--connection <name>`, `-c <name>`: 连接名
 - `--command <command>`: 远端命令
-- `--command-file <path>`: 从本地 UTF-8 文件读取远端命令，适合执行多行脚本，不能和 `--command` 或位置参数 `<command>` 同时使用
+- `--command-file <path>`: 从本地 UTF-8 文件读取远端命令，适合执行多行脚本，文件必须使用 LF 换行，不能使用 Windows CRLF 换行；不能和 `--command` 或位置参数 `<command>` 同时使用
 - `--directory <dir>`, `-d <dir>`: 远端工作目录
 - `--timeout <ms>`, `-t <ms>`: 超时毫秒值，默认 `30000`
 - `--pty`: 本次命令分配伪终端，优先级高于配置文件
 - `--no-pty`: 本次命令不分配伪终端，优先级高于配置文件
 - `--no-cache`: 不复用连接，必须放在连接名或 `--connection` 前
 - `--cache-ttl <ms>`: 连接缓存空闲毫秒数，必须放在连接名或 `--connection` 前
+
+使用 `--command-file` 时，必须确保脚本文件是 LF 换行。CRLF 文件会把 `\r` 传到远端 bash，可能导致 `$'xxx\r': command not found`。
+
+macOS/Linux 推荐写法：
+
+```bash
+cat > /tmp/remote-command.sh <<'EOF'
+pwd
+EOF
+agentsshcli exec --connection "<connectionName>" --command-file /tmp/remote-command.sh
+```
+
+Windows PowerShell 推荐显式写 LF：
+
+```powershell
+[System.IO.File]::WriteAllText("$env:TEMP\remote-command.sh", "pwd`n", [System.Text.UTF8Encoding]::new($false))
+agentsshcli exec --connection "<connectionName>" --command-file "$env:TEMP\remote-command.sh"
+```
 
 返回值：
 
