@@ -84,7 +84,7 @@ jobs:
         with:
           node-version: 22
       - run: npm install -g npm@11.5.1
-      - run: npm ci --omit=optional
+      - run: npm install --package-lock-only --omit=optional --ignore-scripts
       - name: Publish main package
         shell: bash
         run: |
