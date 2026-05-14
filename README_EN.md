@@ -50,7 +50,6 @@ Please read https://github.com/sleepinginsummer/agent-ssh-cli/blob/main/AI_INSTA
 
 - Node.js `>= 18`
 - npm `>= 8`
-- Currently supports Windows (including WSL), macOS, and Linux. The runtime environment must be able to use Chrome extensions
 - Local network access to the target SSH server
 - If private key authentication is used, the private key file must be readable by the current user
 - Prebuilt platform packages support macOS arm64/x64, Linux x64/arm64, and Windows x64

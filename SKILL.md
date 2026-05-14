@@ -16,7 +16,7 @@ description: 使用基于 SSH 的 CLI 安全操作已配置的远端服务器。
 - 通过命令黑白名单限制可执行命令
 - 通过本地路径白名单限制上传和下载访问范围
 - 通过 Rust daemon 短时间缓存 SSH 连接，减少连续操作时的重复连接开销
-- npm 安装会按当前系统自动拉取对应平台的 optional 预编译包，当前支持 Windows（包括 WSL）/ macOS / Linux，运行环境需能使用 Chrome 扩展
+- npm 安装会按当前系统自动拉取对应平台的 optional 预编译包，当前支持 macOS arm64/x64、Linux x64/arm64、Windows x64
 
 它不做的事：
 

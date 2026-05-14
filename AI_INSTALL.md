@@ -2,7 +2,7 @@
 
 使用本工具时，先按下面步骤安装 CLI 和 skill。CLI 仍通过 npm 安装，内部 SSH 执行逻辑由 Rust 原生执行器完成。
 
-npm 安装会按当前系统自动拉取对应平台的 optional 预编译包；当前支持 Windows（包括 WSL）/ macOS / Linux，运行环境需能使用 Chrome 扩展。
+npm 安装会按当前系统自动拉取对应平台的 optional 预编译包；当前支持 macOS arm64/x64、Linux x64/arm64、Windows x64。
 
 
 ## 1. 安装 CLI

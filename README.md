@@ -49,7 +49,7 @@
 
 - Node.js `>= 18`
 - npm `>= 8`
-- 当前支持 Windows（包括 WSL）/ macOS / Linux，运行环境需能使用 Chrome 扩展
+- 系统支持 Windows / macOS / Linux
 - 本机网络可访问目标 SSH 服务器
 - 如使用私钥认证，私钥文件需对当前用户可读
 - 预编译平台包支持 macOS arm64/x64、Linux x64/arm64、Windows x64
