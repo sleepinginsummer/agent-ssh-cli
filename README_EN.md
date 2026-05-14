@@ -163,6 +163,8 @@ Update to the latest version:
 npm install -g agent-ssh-cli@latest
 ```
 
+Remove:
+
 ```bash
 npm uninstall -g agent-ssh-cli
 npm cache clean --force

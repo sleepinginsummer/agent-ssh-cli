@@ -162,6 +162,8 @@ agentsshcli exec 密码服务器 --command-file ./script.sh --timeout 60000
 npm install -g agent-ssh-cli@latest
 ```
 
+卸载:
+
 ```bash
 npm uninstall -g agent-ssh-cli
 npm cache clean --force
