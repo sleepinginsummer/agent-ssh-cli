@@ -39,6 +39,7 @@ const PASSWORD_REF_PREFIX: &str = "agentsshcli:";
 const DEFAULT_CACHE_TTL_MS: u64 = 180_000;
 const DAEMON_START_TIMEOUT_MS: u64 = 3_000;
 const DAEMON_REQUEST_TIMEOUT_MS: u64 = 86_400_000;
+const DAEMON_RESPONSE_LENGTH_BYTES: usize = 8;
 
 const HELP_AGENTSSHCLI: &str = r#"
 用法:
@@ -1924,6 +1925,19 @@ mod tests {
         assert_eq!(proxy.host, "127.0.0.1");
         assert_eq!(proxy.port, 1080);
     }
+
+    #[test]
+    fn daemon_response_frame_round_trips_large_stdout() {
+        let response = DaemonResponse {
+            ok: true,
+            message: None,
+            stdout: Some("A".repeat(200_000)),
+        };
+        let mut bytes = Vec::new();
+        write_daemon_response(&mut bytes, &response).unwrap();
+        let parsed = read_daemon_response(&mut bytes.as_slice()).unwrap();
+        assert_eq!(parsed.stdout.as_deref(), response.stdout.as_deref());
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2026,30 +2040,20 @@ fn request_daemon(config_path: &Path, request: &serde_json::Value) -> AppResult<
     let line = format!("{}\n", serde_json::to_string(request)?);
     stream.write_all(line.as_bytes())?;
     stream.flush()?;
-    let response_line = read_line_from_socket(&mut stream)?;
-    if response_line.is_empty() {
+    let response = read_daemon_response(&mut stream);
+    if matches_empty_daemon_response(&response) {
         unlink_socket_path(&socket_path)?;
         ensure_daemon(&socket_path, config_path)?;
         let mut retry_stream = connect_socket(&socket_path, DAEMON_REQUEST_TIMEOUT_MS)?;
         retry_stream.write_all(line.as_bytes())?;
         retry_stream.flush()?;
-        let retry_line = read_line_from_socket(&mut retry_stream)?;
-        if retry_line.is_empty() {
-            return Err(AppError::new("SSH 缓存进程提前关闭连接"));
-        }
-        let response: DaemonResponse = serde_json::from_str(&retry_line)
-            .map_err(|error| AppError::new(format!("SSH 缓存进程响应非法: {}", error)))?;
-        if !response.ok {
-            return Err(AppError::new(
-                response
-                    .message
-                    .unwrap_or_else(|| "SSH 缓存进程执行失败".to_string()),
-            ));
-        }
-        return Ok(response);
+        let retry_response = read_daemon_response(&mut retry_stream)?;
+        return validate_daemon_response(retry_response);
     }
-    let response: DaemonResponse = serde_json::from_str(&response_line)
-        .map_err(|error| AppError::new(format!("SSH 缓存进程响应非法: {}", error)))?;
+    validate_daemon_response(response?)
+}
+
+fn validate_daemon_response(response: DaemonResponse) -> AppResult<DaemonResponse> {
     if !response.ok {
         return Err(AppError::new(
             response
@@ -2058,6 +2062,10 @@ fn request_daemon(config_path: &Path, request: &serde_json::Value) -> AppResult<
         ));
     }
     Ok(response)
+}
+
+fn matches_empty_daemon_response(response: &AppResult<DaemonResponse>) -> bool {
+    matches!(response, Err(error) if error.to_string() == "SSH 缓存进程提前关闭连接")
 }
 
 fn ensure_daemon(socket_path: &Path, config_path: &Path) -> AppResult<()> {
@@ -2220,6 +2228,40 @@ fn read_line_from_socket<S: Read>(stream: &mut S) -> AppResult<String> {
         .map_err(|error| AppError::new(format!("SSH 缓存进程响应非法: {}", error)))
 }
 
+fn read_daemon_response<S: Read>(stream: &mut S) -> AppResult<DaemonResponse> {
+    let mut header = [0_u8; DAEMON_RESPONSE_LENGTH_BYTES];
+    match stream.read_exact(&mut header) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+            return Err(AppError::new("SSH 缓存进程提前关闭连接"));
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let length_text = std::str::from_utf8(&header)
+        .map_err(|error| AppError::new(format!("SSH 缓存进程响应长度非法: {}", error)))?;
+    let length = usize::from_str_radix(length_text, 16)
+        .map_err(|error| AppError::new(format!("SSH 缓存进程响应长度非法: {}", error)))?;
+    let mut body = vec![0_u8; length];
+    stream
+        .read_exact(&mut body)
+        .map_err(|error| AppError::new(format!("SSH 缓存进程响应未读完整: {}", error)))?;
+    serde_json::from_slice(&body)
+        .map_err(|error| AppError::new(format!("SSH 缓存进程响应非法: {}", error)))
+}
+
+fn write_daemon_response<S: Write>(stream: &mut S, response: &DaemonResponse) -> AppResult<()> {
+    let body = serde_json::to_vec(response)?;
+    if body.len() > u32::MAX as usize {
+        return Err(AppError::new("SSH 缓存进程响应过大"));
+    }
+    // 响应使用固定 8 字节十六进制长度前缀，客户端按长度读满后再解析 JSON。
+    let header = format!("{:08x}", body.len());
+    stream.write_all(header.as_bytes())?;
+    stream.write_all(&body)?;
+    stream.flush()?;
+    Ok(())
+}
+
 #[cfg(unix)]
 fn run_daemon(argv: Vec<String>) -> AppResult<()> {
     let (socket_path, config_path) = parse_daemon_args(argv)?;
@@ -2234,6 +2276,7 @@ fn run_daemon(argv: Vec<String>) -> AppResult<()> {
         listener.set_nonblocking(true)?;
         match listener.accept() {
             Ok((mut stream, _)) => {
+                stream.set_nonblocking(false)?;
                 last_activity_at = Instant::now();
                 let response =
                     match handle_daemon_stream(&mut stream, &bound_config_path, &mut state) {
@@ -2244,9 +2287,7 @@ fn run_daemon(argv: Vec<String>) -> AppResult<()> {
                             stdout: None,
                         },
                     };
-                let line = format!("{}\n", serde_json::to_string(&response)?);
-                stream.write_all(line.as_bytes())?;
-                stream.flush()?;
+                write_daemon_response(&mut stream, &response)?;
                 expire_connections(&mut state.connections);
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -2290,9 +2331,7 @@ fn run_daemon(argv: Vec<String>) -> AppResult<()> {
                             stdout: None,
                         },
                     };
-                let line = format!("{}\n", serde_json::to_string(&response)?);
-                stream.write_all(line.as_bytes())?;
-                stream.flush()?;
+                write_daemon_response(&mut stream, &response)?;
                 expire_connections(&mut state.connections);
             }
             Err(error) => return Err(AppError::new(error.to_string())),
