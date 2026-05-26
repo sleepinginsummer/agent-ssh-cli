@@ -1,6 +1,6 @@
 {
   "name": "@agent-ssh-cli/linux-x64",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "agent-ssh-cli native binary for linux-x64",
   "license": "MIT",
   "os": [

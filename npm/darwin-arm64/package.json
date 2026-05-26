@@ -1,6 +1,6 @@
 {
   "name": "@agent-ssh-cli/darwin-arm64",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "agent-ssh-cli native binary for darwin-arm64",
   "license": "MIT",
   "repository": {

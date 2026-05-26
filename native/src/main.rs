@@ -503,9 +503,13 @@ fn load_config(config_path: &Path) -> AppResult<Vec<Connection>> {
     Ok(configs)
 }
 
-fn load_config_for_connection(config_path: &Path) -> AppResult<Vec<Connection>> {
+fn load_config_for_connection(
+    config_path: &Path,
+    connection_name: &str,
+) -> AppResult<Vec<Connection>> {
     let mut configs = load_config(config_path)?;
-    resolve_password_refs(config_path, &mut configs)?;
+    let _ = find_connection(&configs, connection_name)?;
+    resolve_password_ref_for_connection(config_path, &mut configs, connection_name)?;
     Ok(configs)
 }
 
@@ -654,12 +658,18 @@ fn decrypt_password(config_path: &Path, password_ref: &str) -> AppResult<String>
         .map_err(|error| AppError::new(format!("本地密码编码非法: {}", error)))
 }
 
-fn resolve_password_refs(config_path: &Path, configs: &mut [Connection]) -> AppResult<()> {
-    for config in configs {
-        if config.password.is_none() {
-            if let Some(password_ref) = config.password_ref.as_deref() {
-                config.password = Some(decrypt_password(config_path, password_ref)?);
-            }
+fn resolve_password_ref_for_connection(
+    config_path: &Path,
+    configs: &mut [Connection],
+    connection_name: &str,
+) -> AppResult<()> {
+    let config = configs
+        .iter_mut()
+        .find(|item| item.name == connection_name)
+        .ok_or_else(|| AppError::new(format!("未找到连接配置: {}", connection_name)))?;
+    if config.password.is_none() {
+        if let Some(password_ref) = config.password_ref.as_deref() {
+            config.password = Some(decrypt_password(config_path, password_ref)?);
         }
     }
     Ok(())
@@ -1115,7 +1125,7 @@ fn run_exec(argv: Vec<String>) -> AppResult<()> {
         return print_version();
     }
     prepare_connection_config(&parsed.global.config_path, &parsed.connection_name)?;
-    let configs = load_config_for_connection(&parsed.global.config_path)?;
+    let configs = load_config_for_connection(&parsed.global.config_path, &parsed.connection_name)?;
     let connection = find_connection(&configs, &parsed.connection_name)?;
     let command = resolve_execute_command(&configs, &parsed)?;
     validate_command(connection, &command)?;
@@ -1148,7 +1158,7 @@ fn run_upload(argv: Vec<String>) -> AppResult<()> {
         return print_version();
     }
     prepare_connection_config(&parsed.global.config_path, &parsed.connection_name)?;
-    let configs = load_config_for_connection(&parsed.global.config_path)?;
+    let configs = load_config_for_connection(&parsed.global.config_path, &parsed.connection_name)?;
     let connection = find_connection(&configs, &parsed.connection_name)?;
     if parsed.global.no_cache {
         let local_path = validate_local_path(&configs, &parsed.local_path, &env::current_dir()?)?;
@@ -1169,7 +1179,7 @@ fn run_download(argv: Vec<String>) -> AppResult<()> {
         return print_version();
     }
     prepare_connection_config(&parsed.global.config_path, &parsed.connection_name)?;
-    let configs = load_config_for_connection(&parsed.global.config_path)?;
+    let configs = load_config_for_connection(&parsed.global.config_path, &parsed.connection_name)?;
     let connection = find_connection(&configs, &parsed.connection_name)?;
     if parsed.global.no_cache {
         let local_path = validate_local_path(&configs, &parsed.local_path, &env::current_dir()?)?;
@@ -1812,8 +1822,35 @@ mod tests {
         assert!(!raw.contains("secret"));
         assert!(raw.contains(r#""password": """#));
         assert!(raw.contains(r#""passwordRef": "agentsshcli:server""#));
-        let configs = load_config_for_connection(&path).unwrap();
+        let configs = load_config_for_connection(&path, "server").unwrap();
         let connection = find_connection(&configs, "server").unwrap();
+        assert_eq!(connection.password.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn load_config_for_connection_ignores_unrelated_missing_password_ref() {
+        let (_dir, path) = write_config(
+            r#"[
+              {"name":"key-server","host":"127.0.0.1","username":"root","privateKey":"/tmp/id_rsa"},
+              {"name":"bad-password-server","host":"127.0.0.2","username":"root","password":"","passwordRef":"agentsshcli:missing"}
+            ]"#,
+        );
+        let configs = load_config_for_connection(&path, "key-server").unwrap();
+        let connection = find_connection(&configs, "key-server").unwrap();
+        assert_eq!(connection.private_key.as_deref(), Some("/tmp/id_rsa"));
+    }
+
+    #[test]
+    fn load_config_for_connection_resolves_only_target_password_ref() {
+        let (_dir, path) = write_config(
+            r#"[
+              {"name":"target","host":"127.0.0.1","username":"root","password":"secret"},
+              {"name":"bad-password-server","host":"127.0.0.2","username":"root","password":"","passwordRef":"agentsshcli:missing"}
+            ]"#,
+        );
+        assert!(migrate_plain_password_for_connection(&path, "target").unwrap());
+        let configs = load_config_for_connection(&path, "target").unwrap();
+        let connection = find_connection(&configs, "target").unwrap();
         assert_eq!(connection.password.as_deref(), Some("secret"));
     }
 
@@ -1984,7 +2021,7 @@ impl DaemonState {
             runtime: tokio::runtime::Runtime::new()
                 .map_err(|error| AppError::new(format!("创建 tokio runtime 失败: {}", error)))?,
             config_snapshot: ConfigSnapshot::read(config_path)?,
-            configs: load_config_for_connection(config_path)?,
+            configs: load_config(config_path)?,
             connections: HashMap::new(),
         })
     }
@@ -2463,6 +2500,11 @@ fn handle_daemon_stream<S: Read + Write>(
         return Err(AppError::new("cache-ttl 必须是正整数毫秒值"));
     }
     reload_daemon_config_if_changed(bound_config_path, state)?;
+    resolve_password_ref_for_connection(
+        bound_config_path,
+        &mut state.configs,
+        &request.connection_name,
+    )?;
     let connection = find_connection(&state.configs, &request.connection_name)?.clone();
     if request.operation == "execute" {
         let command = request
@@ -2614,7 +2656,7 @@ fn reload_daemon_config_if_changed(config_path: &Path, state: &mut DaemonState) 
         state.config_snapshot = current_snapshot;
         return Ok(());
     }
-    let configs = load_config_for_connection(config_path)?;
+    let configs = load_config(config_path)?;
     state.config_snapshot = current_snapshot;
     state.configs = configs;
     state.connections.clear();
