@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::env;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::net::IpAddr;
 #[cfg(unix)]
@@ -34,6 +34,7 @@ const DEFAULT_CONFIG_DIR: &str = ".agent-ssh-cli";
 const DEFAULT_CONFIG_FILE: &str = "config.json";
 const SECRET_KEY_FILE: &str = "secret.key";
 const SECRETS_FILE: &str = "secrets.json";
+const MIGRATION_LOCK_FILE: &str = ".password-migration.lock";
 const SECRETS_VERSION: u8 = 1;
 const PASSWORD_REF_PREFIX: &str = "agentsshcli:";
 const DEFAULT_CACHE_TTL_MS: u64 = 180_000;
@@ -541,6 +542,70 @@ fn secrets_path(config_path: &Path) -> AppResult<PathBuf> {
     Ok(config_dir(config_path)?.join(SECRETS_FILE))
 }
 
+struct MigrationLock {
+    file: File,
+}
+
+impl MigrationLock {
+    fn acquire(config_path: &Path) -> AppResult<Self> {
+        let path = config_dir(config_path)?.join(MIGRATION_LOCK_FILE);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&path)?;
+        lock_file_exclusive(&file)?;
+        Ok(Self { file })
+    }
+}
+
+impl Drop for MigrationLock {
+    fn drop(&mut self) {
+        let _ = unlock_file(&self.file);
+    }
+}
+
+#[cfg(unix)]
+fn lock_file_exclusive(file: &File) -> AppResult<()> {
+    let fd = std::os::fd::AsRawFd::as_raw_fd(file);
+    let rc = unsafe { libc::flock(fd, libc::LOCK_EX) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(AppError::new(format!(
+            "获取本地密码迁移锁失败: {}",
+            std::io::Error::last_os_error()
+        )))
+    }
+}
+
+#[cfg(unix)]
+fn unlock_file(file: &File) -> AppResult<()> {
+    let fd = std::os::fd::AsRawFd::as_raw_fd(file);
+    let rc = unsafe { libc::flock(fd, libc::LOCK_UN) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(AppError::new(format!(
+            "释放本地密码迁移锁失败: {}",
+            std::io::Error::last_os_error()
+        )))
+    }
+}
+
+#[cfg(not(unix))]
+fn lock_file_exclusive(_file: &File) -> AppResult<()> {
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn unlock_file(_file: &File) -> AppResult<()> {
+    Ok(())
+}
+
 fn load_or_create_secret_key(config_path: &Path) -> AppResult<[u8; 32]> {
     let path = secret_key_path(config_path)?;
     if path.exists() {
@@ -683,6 +748,7 @@ fn migrate_plain_password_for_connection(
     config_path: &Path,
     connection_name: &str,
 ) -> AppResult<bool> {
+    let _lock = MigrationLock::acquire(config_path)?;
     let raw = fs::read_to_string(config_path)?;
     let mut values: Vec<serde_json::Value> = serde_json::from_str(&raw)
         .map_err(|error| AppError::new(format!("ssh-config.json 解析失败: {}", error)))?;

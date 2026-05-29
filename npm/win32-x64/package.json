@@ -1,6 +1,6 @@
 {
   "name": "@agent-ssh-cli/win32-x64",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "agent-ssh-cli native binary for win32-x64",
   "license": "MIT",
   "os": [
