@@ -1965,9 +1965,21 @@ async fn ensure_upload_resume_meta(
     // 本地文件特征变化时，旧 .part 不能安全续传，必须删除后重建元数据。
     let _ = sftp.remove_file(temp_remote_path.to_string()).await;
     let _ = sftp.remove_file(temp_remote_meta_path.to_string()).await;
-    sftp.write(temp_remote_meta_path.to_string(), &expected)
+    let mut meta_file = sftp
+        .open_with_flags(
+            temp_remote_meta_path.to_string(),
+            OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
+        )
+        .await
+        .map_err(|error| AppError::new(format!("创建远端续传元数据失败: {}", error)))?;
+    meta_file
+        .write_all(&expected)
         .await
         .map_err(|error| AppError::new(format!("写入远端续传元数据失败: {}", error)))?;
+    meta_file
+        .shutdown()
+        .await
+        .map_err(|error| AppError::new(format!("关闭远端续传元数据失败: {}", error)))?;
     Ok(())
 }
 
