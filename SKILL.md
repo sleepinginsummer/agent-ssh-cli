@@ -14,7 +14,6 @@ description: 使用基于 SSH 的 CLI 安全操作已配置的远端服务器。
 - 上传本地文件到远端服务器
 - 从远端服务器下载文件到本地
 - 通过命令黑白名单限制可执行命令
-- 通过本地路径白名单限制上传和下载访问范围
 - 通过 Rust daemon 短时间缓存 SSH 连接，减少连续操作时的重复连接开销
 - npm 安装会按当前系统自动拉取对应平台的 optional 预编译包，当前支持 macOS arm64/x64、Linux x64/arm64、Windows x64
 
@@ -22,7 +21,7 @@ description: 使用基于 SSH 的 CLI 安全操作已配置的远端服务器。
 
 - 不保存或输出密码、私钥等敏感认证信息
 - 不扫描网络或发现服务器，只使用配置文件中的连接
-- 不绕过配置中的命令限制和本地路径限制
+- 不绕过配置中的命令限制
 
 命令黑白名单使用 JavaScript `RegExp` 语法，不是 POSIX 正则。空白字符要写成 `\\s`，不要写 `[:space:]`。例如：
 
@@ -270,7 +269,7 @@ agentsshcli upload --no-cache --connection "<connectionName>" --local "./tmp/upl
 
 - 成功时 stdout 输出 `File uploaded successfully`
 - 退出码为 `0`
-- 本地路径不在允许范围、远端写入失败或连接失败时，stderr 输出错误信息，退出码为 `1`
+- 本地文件不存在、远端写入失败或连接失败时，stderr 输出错误信息，退出码为 `1`
 
 ## download
 
@@ -305,7 +304,7 @@ agentsshcli download --no-cache --connection "<connectionName>" --remote "/usr/l
 
 - 成功时 stdout 输出 `File downloaded successfully`
 - 退出码为 `0`
-- 本地路径不在允许范围、远端读取失败或连接失败时，stderr 输出错误信息，退出码为 `1`
+- 本地写入失败、远端读取失败或连接失败时，stderr 输出错误信息，退出码为 `1`
 
 ## help/version
 
@@ -330,6 +329,6 @@ agentsshcli --version
 - `--no-cache` 和 `--cache-ttl` 必须放在 `exec`、`upload`、`download` 后、连接名或 `--connection` 前
 - `timeout` 和 `cache-ttl` 必须是正整数毫秒值
 - `list` 不接受位置参数
-- `upload` / `download` 的本地路径必须位于当前工作目录、项目目录或 `allowedLocalPaths` 内
+- `upload` / `download` 的本地路径按传入路径解析，不再限制在当前工作目录、项目目录或 `allowedLocalPaths` 内
 - 出现 `启动 SSH 缓存进程失败` 通常表示本地 Rust daemon 或其 socket 启动/握手失败；如需绕过缓存验证远端命令，应在子命令后添加 `--no-cache`
 - 所有失败统一在 stderr 输出错误信息，退出码为 `1`

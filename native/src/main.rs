@@ -190,7 +190,6 @@ struct Connection {
     socks_proxy: Option<String>,
     jump_host: Option<String>,
     pty: Option<bool>,
-    allowed_local_paths: Vec<String>,
     command_whitelist: Vec<PatternRule>,
     command_blacklist: Vec<PatternRule>,
 }
@@ -507,6 +506,7 @@ fn normalize_entry(entry: RawConnection, index: usize) -> AppResult<Connection> 
             index + 1
         )));
     }
+    let _ = ensure_string_array(entry.allowed_local_paths, "allowedLocalPaths", index)?;
     Ok(Connection {
         name,
         host,
@@ -519,11 +519,6 @@ fn normalize_entry(entry: RawConnection, index: usize) -> AppResult<Connection> 
         socks_proxy: entry.socks_proxy,
         jump_host: entry.jump_host,
         pty: entry.pty,
-        allowed_local_paths: ensure_string_array(
-            entry.allowed_local_paths,
-            "allowedLocalPaths",
-            index,
-        )?,
         command_whitelist: ensure_regex_array(entry.command_whitelist, "commandWhitelist", index)?,
         command_blacklist: ensure_regex_array(entry.command_blacklist, "commandBlacklist", index)?,
     })
@@ -928,44 +923,19 @@ fn find_connection<'a>(
 }
 
 fn path_absolute(path: &Path) -> AppResult<PathBuf> {
+    path_absolute_from(path, &env::current_dir()?)
+}
+
+fn path_absolute_from(path: &Path, base_cwd: &Path) -> AppResult<PathBuf> {
     if path.is_absolute() {
         Ok(path.to_path_buf())
     } else {
-        Ok(env::current_dir()?.join(path))
+        Ok(base_cwd.join(path))
     }
 }
 
 fn canonical_or_absolute(path: PathBuf) -> PathBuf {
     path.canonicalize().unwrap_or(path)
-}
-
-fn validate_local_path(
-    configs: &[Connection],
-    local_path: &str,
-    base_cwd: &Path,
-) -> AppResult<PathBuf> {
-    let resolved_cwd = canonical_or_absolute(base_cwd.to_path_buf());
-    let candidate = Path::new(local_path);
-    let resolved_path = if candidate.is_absolute() {
-        canonical_or_absolute(candidate.to_path_buf())
-    } else {
-        canonical_or_absolute(resolved_cwd.join(candidate))
-    };
-    let mut allowed_roots = vec![resolved_cwd, project_root()?];
-    for config in configs {
-        for allowed_path in &config.allowed_local_paths {
-            allowed_roots.push(canonical_or_absolute(PathBuf::from(allowed_path)));
-        }
-    }
-    if allowed_roots
-        .iter()
-        .any(|root| resolved_path == *root || resolved_path.starts_with(root))
-    {
-        return Ok(resolved_path);
-    }
-    Err(AppError::new(
-        "本地路径不允许访问，必须位于当前工作目录、项目目录或显式允许的路径内",
-    ))
 }
 
 fn parse_global_args(argv: Vec<String>) -> AppResult<GlobalArgs> {
@@ -1326,7 +1296,7 @@ fn run_upload(argv: Vec<String>) -> AppResult<()> {
     let configs = load_config_for_connection(&parsed.global.config_path, &parsed.connection_name)?;
     let connection = find_connection(&configs, &parsed.connection_name)?;
     if parsed.global.no_cache {
-        let local_path = validate_local_path(&configs, &parsed.local_path, &env::current_dir()?)?;
+        let local_path = path_absolute_from(Path::new(&parsed.local_path), &env::current_dir()?)?;
         upload_file(&configs, connection, &local_path, &parsed.remote_path)?;
     } else {
         request_daemon_transfer(&parsed, "upload")?;
@@ -1347,7 +1317,7 @@ fn run_download(argv: Vec<String>) -> AppResult<()> {
     let configs = load_config_for_connection(&parsed.global.config_path, &parsed.connection_name)?;
     let connection = find_connection(&configs, &parsed.connection_name)?;
     if parsed.global.no_cache {
-        let local_path = validate_local_path(&configs, &parsed.local_path, &env::current_dir()?)?;
+        let local_path = path_absolute_from(Path::new(&parsed.local_path), &env::current_dir()?)?;
         if let Some(parent) = local_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -2143,11 +2113,12 @@ fn resolve_pty(connection: &Connection, override_pty: Option<bool>) -> bool {
     override_pty.or(connection.pty).unwrap_or(false)
 }
 
-fn resolve_execute_command(configs: &[Connection], parsed: &ExecuteArgs) -> AppResult<String> {
+fn resolve_execute_command(_configs: &[Connection], parsed: &ExecuteArgs) -> AppResult<String> {
     let Some(command_file) = parsed.command_file.as_ref() else {
         return Ok(parsed.command.clone());
     };
-    let path = validate_local_path(configs, command_file, &env::current_dir()?)?;
+    let path = path_absolute_from(Path::new(command_file), &env::current_dir()?)?;
+    // 命令文件只做路径解析，不套用上传/下载的本地路径白名单。
     // 命令文件按 UTF-8 读取，避免二进制内容或错误编码被误当作远端 shell 命令执行。
     fs::read_to_string(&path).map_err(|error| {
         AppError::new(format!(
@@ -3075,7 +3046,7 @@ fn handle_daemon_stream<S: Read + Write>(
             let remote = request
                 .remote_path
                 .ok_or_else(|| AppError::new("daemon upload 缺少 remotePath"))?;
-            let local_path = validate_local_path(&state.configs, &local, &request.cwd)?;
+            let local_path = path_absolute_from(Path::new(&local), &request.cwd)?;
             if let Err(error) = state.runtime.block_on(upload_file_with_session_async(
                 &entry.session,
                 &connection,
@@ -3097,7 +3068,7 @@ fn handle_daemon_stream<S: Read + Write>(
             let remote = request
                 .remote_path
                 .ok_or_else(|| AppError::new("daemon download 缺少 remotePath"))?;
-            let local_path = validate_local_path(&state.configs, &local, &request.cwd)?;
+            let local_path = path_absolute_from(Path::new(&local), &request.cwd)?;
             if let Some(parent) = local_path.parent() {
                 fs::create_dir_all(parent)?;
             }

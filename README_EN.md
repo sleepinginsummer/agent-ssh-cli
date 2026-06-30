@@ -37,7 +37,6 @@ This project references the SSH operation design from [classfang/ssh-mcp-server]
 - Upload local files to a remote server with temporary files, resume, and retry
 - Download files from a remote server to local
 - Restrict executable commands through command allowlists and blocklists
-- Restrict upload and download access scopes through a local path allowlist
 
 ## Upload Reliability
 
@@ -99,7 +98,7 @@ The configuration file is an array, and each item represents one server:
 - `socksProxy`: SOCKS5 proxy address, for example `socks5://127.0.0.1:1080`; the scheme can also be omitted as `127.0.0.1:1080`
 - `jumpHost`: Jump host connection name, must reference another `name` in the config file
 - `pty`: Whether to allocate a pseudo-terminal, defaults to `false`; it can also be enabled per command with `exec --pty`
-- `allowedLocalPaths`: Extra local paths allowed for upload or download writes
+- `allowedLocalPaths`: Legacy-compatible field; local paths are not restricted now
 - `commandWhitelist`: Command whitelist regular expression array
 - `commandBlacklist`: Command blacklist regular expression array
 

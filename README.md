@@ -36,7 +36,6 @@
 - 上传本地文件到远端服务器，支持临时文件、断点续传和失败重试
 - 从远端服务器下载文件到本地
 - 通过命令黑白名单限制可执行命令
-- 通过本地路径白名单限制上传和下载访问范围
 
 ## 上传稳定性
 
@@ -100,7 +99,7 @@ AGENT_SSH_CONFIG=/path/to/config.json
 - `socksProxy`: SOCKS5 代理地址，例如 `socks5://127.0.0.1:1080`；也可省略协议写成 `127.0.0.1:1080`
 - `jumpHost`: 跳板机连接名，填写配置文件中另一台机器的 `name`
 - `pty`: 是否分配伪终端，默认 `false`，也可通过 `exec --pty` 临时开启
-- `allowedLocalPaths`: 额外允许上传或下载写入的本地路径
+- `allowedLocalPaths`: 兼容旧配置字段，当前不限制本地路径
 - `commandWhitelist`: 命令白名单正则数组
 - `commandBlacklist`: 命令黑名单正则数组
 
