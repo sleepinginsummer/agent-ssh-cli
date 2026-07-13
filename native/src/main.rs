@@ -638,7 +638,7 @@ fn lock_file_exclusive(file: &File) -> AppResult<()> {
         Ok(())
     } else {
         Err(AppError::new(format!(
-            "获取本地密码迁移锁失败: {}",
+            "获取本地文件锁失败: {}",
             std::io::Error::last_os_error()
         )))
     }
@@ -652,7 +652,7 @@ fn unlock_file(file: &File) -> AppResult<()> {
         Ok(())
     } else {
         Err(AppError::new(format!(
-            "释放本地密码迁移锁失败: {}",
+            "释放本地文件锁失败: {}",
             std::io::Error::last_os_error()
         )))
     }
@@ -2382,6 +2382,25 @@ mod tests {
         let parsed = read_daemon_response(&mut bytes.as_slice()).unwrap();
         assert_eq!(parsed.stdout.as_deref(), response.stdout.as_deref());
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_start_lock_serializes_concurrent_starters() {
+        let dir = tempdir().unwrap();
+        let socket_path = dir.path().join("daemon.sock");
+        let first_lock = DaemonStartLock::acquire(&socket_path).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+
+        let worker = std::thread::spawn(move || {
+            let _second_lock = DaemonStartLock::acquire(&socket_path).unwrap();
+            sender.send(()).unwrap();
+        });
+
+        assert!(receiver.recv_timeout(Duration::from_millis(100)).is_err());
+        drop(first_lock);
+        receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        worker.join().unwrap();
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2503,7 +2522,6 @@ fn request_daemon(config_path: &Path, request: &serde_json::Value) -> AppResult<
     stream.flush()?;
     let response = read_daemon_response(&mut stream);
     if matches_empty_daemon_response(&response) {
-        unlink_socket_path(&socket_path)?;
         ensure_daemon(&socket_path, config_path)?;
         let mut retry_stream = connect_socket(&socket_path, DAEMON_REQUEST_TIMEOUT_MS)?;
         retry_stream.write_all(line.as_bytes())?;
@@ -2529,17 +2547,51 @@ fn matches_empty_daemon_response(response: &AppResult<DaemonResponse>) -> bool {
     matches!(response, Err(error) if error.to_string() == "SSH 缓存进程提前关闭连接")
 }
 
-fn ensure_daemon(socket_path: &Path, config_path: &Path) -> AppResult<()> {
-    match connect_socket(socket_path, 500) {
-        Ok(mut stream) => {
-            let _ = stream.write_all(b"{\"operation\":\"ping\"}\n");
-            match read_line_from_socket(&mut stream) {
-                Ok(line) if !line.is_empty() => return Ok(()),
-                _ => unlink_socket_path(socket_path)?,
-            }
-        }
-        Err(_) => unlink_socket_path(socket_path)?,
+struct DaemonStartLock {
+    file: File,
+}
+
+impl DaemonStartLock {
+    fn acquire(socket_path: &Path) -> AppResult<Self> {
+        let lock_path = socket_path.with_extension("lock");
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(lock_path)?;
+        lock_file_exclusive(&file)?;
+        Ok(Self { file })
     }
+}
+
+impl Drop for DaemonStartLock {
+    fn drop(&mut self) {
+        let _ = unlock_file(&self.file);
+    }
+}
+
+fn daemon_is_healthy(socket_path: &Path) -> bool {
+    let Ok(mut stream) = connect_socket(socket_path, 500) else {
+        return false;
+    };
+    if stream.write_all(b"{\"operation\":\"ping\"}\n").is_err() {
+        return false;
+    }
+    matches!(read_line_from_socket(&mut stream), Ok(line) if !line.is_empty())
+}
+
+fn ensure_daemon(socket_path: &Path, config_path: &Path) -> AppResult<()> {
+    if daemon_is_healthy(socket_path) {
+        return Ok(());
+    }
+
+    // daemon 冷启动必须跨进程串行化；持锁后再次探活，避免并发方重复拉起进程。
+    let _start_lock = DaemonStartLock::acquire(socket_path)?;
+    if daemon_is_healthy(socket_path) {
+        return Ok(());
+    }
+
+    unlink_socket_path(socket_path)?;
     let log_path = daemon_log_path(config_path)?;
     spawn_daemon(socket_path, config_path, &log_path)?;
     wait_for_daemon(socket_path, &log_path)
@@ -2773,7 +2825,6 @@ fn write_daemon_response<S: Write>(stream: &mut S, response: &DaemonResponse) ->
 #[cfg(unix)]
 fn run_daemon(argv: Vec<String>) -> AppResult<()> {
     let (socket_path, config_path) = parse_daemon_args(argv)?;
-    unlink_socket_path(&socket_path)?;
     let listener = UnixListener::bind(&socket_path)?;
     fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
     let bound_config_path = path_absolute(&config_path)?;

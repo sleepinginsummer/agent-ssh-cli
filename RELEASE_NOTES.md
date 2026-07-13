@@ -1,5 +1,16 @@
 # Release Notes
 
+## v0.3.9
+
+- 修复多个 CLI 进程并发冷启动 SSH 缓存 daemon 时争抢同一 Unix socket 的竞态。
+- daemon 启动使用跨进程文件锁串行化，持锁后重新探活，仅由启动方清理失效 socket。
+- daemon 子进程不再无条件删除 socket，避免破坏其它并发进程已经建立的监听。
+- 新增 daemon 并发启动锁回归测试。
+
+验证：
+
+- `cargo test --manifest-path native/Cargo.toml --locked` 通过，共 18 项测试。
+
 ## v0.3.7
 
 本次发布聚焦上传稳定性：

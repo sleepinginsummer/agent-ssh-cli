@@ -80,7 +80,7 @@ dependencies = [
 
 [[package]]
 name = "agentsshcli-native"
-version = "0.3.8"
+version = "0.3.9"
 dependencies = [
  "base64",
  "chacha20poly1305",
