@@ -1,5 +1,18 @@
 # Release Notes
 
+## v0.4.1
+
+修复 0.4.0 的两个参数解析回归：
+
+- 修复 `download` 位置参数顺序颠倒：`download <connectionName> <remotePath> <localPath>` 中 remotePath/localPath 被解析反了（单文件下载报「远端文件不存在」）。
+- 修复全局参数前缀扫描：`--no-cache`/`--cache-ttl`/`--config` 之前夹着 `--json`/`--timeout` 等子命令参数时会报误导性的「connectionName 位置参数非法」。现在连接名之前的全局参数与子命令参数可任意顺序混排；连接名之后的 flag 一律明确报「不支持的参数」，不再静默吞掉。
+
+验证：
+
+- `npm test` 通过，共 32 项测试。
+- `npm run build:native` 通过。
+- 真实服务器往返：单文件/目录上传下载 md5 一致、下载断点续传完成。
+
 ## v0.4.0
 
 本次发布聚焦传输可靠性、结构化输出与目录传输：

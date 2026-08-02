@@ -165,7 +165,7 @@ npm test
 - `--cache-ttl <ms>`: 设置 Rust daemon 连接缓存空闲毫秒数，默认 `180000`
 - `--json`: `exec`、`upload`、`download` 输出结构化 JSON（字段 `exitCode`/`stdout`/`stderr`），便于脚本和 AI 解析
 
-缓存参数属于子命令级参数，必须放在 `exec`、`upload`、`download` 后、连接名或 `--connection` 前。放在命令末尾会被当作未知参数。
+所有参数（`--no-cache`、`--cache-ttl`、`--json`、`--timeout`、`--pty` 等）必须放在连接名（第一个位置参数）之前，相互之间可任意顺序混排；放在连接名之后会被当作命令内容的一部分而报「不支持的参数」，命令请用引号包裹。
 
 ## init-config
 

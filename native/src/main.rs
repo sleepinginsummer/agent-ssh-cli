@@ -972,7 +972,16 @@ fn parse_global_args(argv: Vec<String>) -> AppResult<GlobalArgs> {
     let mut no_cache = false;
     let mut cache_ttl_ms = None;
     let mut remaining = Vec::new();
+    // 扫描到第一个位置参数（非 - 开头的 token）为止：
+    // 全局参数（--no-cache/--cache-ttl/--config 等）可与子命令参数（--json/--timeout 等）
+    // 任意顺序混排，只需位于连接名之前；位置参数之后的 token 原样交给子命令解析器，
+    // 避免误吞命令内容中的同名 flag。
     while let Some(current) = args.next() {
+        if !current.starts_with('-') {
+            remaining.push(current);
+            remaining.extend(args);
+            break;
+        }
         match current.as_str() {
             "--help" | "-h" => help = true,
             "--version" | "-v" => version = true,
@@ -990,11 +999,8 @@ fn parse_global_args(argv: Vec<String>) -> AppResult<GlobalArgs> {
                     .ok_or_else(|| AppError::new("--config 缺少路径"))?;
                 config_path = PathBuf::from(value);
             }
-            _ => {
-                remaining.push(current);
-                remaining.extend(args);
-                break;
-            }
+            // 未知 flag：保留给子命令解析器（如 --json/--timeout/--pty/--recursive）
+            _ => remaining.push(current),
         }
     }
     Ok(GlobalArgs {
@@ -1238,19 +1244,32 @@ fn parse_transfer_args(argv: Vec<String>, mode: &str) -> AppResult<TransferArgs>
     };
     let json_output = take_bool_flag(&mut args, "--json")?;
     let recursive = take_bool_flag(&mut args, "--recursive")?;
-    // 位置参数按字段顺序解析（connection → local → remote），命名参数已占用时跳过，
-    // 与原 resolve_value 语义一致：如 `--connection c /a /b` 中 /a /b 归 local/remote。
+    // 位置参数按字段顺序解析：upload 为 connection → local → remote，
+    // download 为 connection → remote → local（与 CLI 语义一致），命名参数已占用时跳过。
     let connection_name = match connection_named {
         Some(name) => Some(name),
         None => take_positional(&mut args, "connectionName")?,
     };
-    let local_path = match local_named {
-        Some(path) => Some(path),
-        None => take_positional(&mut args, "localPath")?,
-    };
-    let remote_path = match remote_named {
-        Some(path) => Some(path),
-        None => take_positional(&mut args, "remotePath")?,
+    let (local_path, remote_path) = if mode == "upload" {
+        let local_path = match local_named {
+            Some(path) => Some(path),
+            None => take_positional(&mut args, "localPath")?,
+        };
+        let remote_path = match remote_named {
+            Some(path) => Some(path),
+            None => take_positional(&mut args, "remotePath")?,
+        };
+        (local_path, remote_path)
+    } else {
+        let remote_path = match remote_named {
+            Some(path) => Some(path),
+            None => take_positional(&mut args, "remotePath")?,
+        };
+        let local_path = match local_named {
+            Some(path) => Some(path),
+            None => take_positional(&mut args, "localPath")?,
+        };
+        (local_path, remote_path)
     };
     ensure_no_unknown_options(&args)?;
     ensure_no_extra_positionals(&args)?;
@@ -2740,6 +2759,34 @@ mod tests {
     }
 
     #[test]
+    fn parse_global_flags_any_order_before_positional() {
+        // 全局参数（--no-cache）与子命令参数（--json）可在连接名前任意顺序混排。
+        let parsed = parse_execute_args(vec![
+            "--json".into(),
+            "--no-cache".into(),
+            "server".into(),
+            "pwd".into(),
+        ])
+        .unwrap();
+        assert!(parsed.json_output);
+        assert!(parsed.global.no_cache);
+        assert_eq!(parsed.connection_name, "server");
+        assert_eq!(parsed.command, "pwd");
+    }
+
+    #[test]
+    fn parse_global_flag_after_positional_rejected() {
+        // 位置参数之后的全局 flag 不被吞掉，明确报错（避免误吞命令内容）。
+        let err = parse_execute_args(vec![
+            "server".into(),
+            "pwd".into(),
+            "--no-cache".into(),
+        ])
+        .unwrap_err();
+        assert!(err.to_string().contains("不支持的参数: --no-cache"));
+    }
+
+    #[test]
     fn parse_exec_does_not_swallow_flag_inside_quoted_command() {
         // 命令内容整体作为一个 token 时（引号包裹），其中的 --json 不被解析为参数。
         let parsed = parse_execute_args(vec!["server".into(), "echo --json".into()]).unwrap();
@@ -2814,6 +2861,22 @@ mod tests {
         ])
         .unwrap_err();
         assert!(err.to_string().contains("--pty 和 --no-pty"));
+    }
+
+    #[test]
+    fn parse_download_positional_order_remote_then_local() {
+        // download 位置参数语义为 <connectionName> <remotePath> <localPath>。
+        let parsed = parse_transfer_args(
+            vec![
+                "server".into(),
+                "/remote/file".into(),
+                "/local/file".into(),
+            ],
+            "download",
+        )
+        .unwrap();
+        assert_eq!(parsed.remote_path, "/remote/file");
+        assert_eq!(parsed.local_path, "/local/file");
     }
 
     #[test]
