@@ -25,22 +25,15 @@ agent-ssh-cli 项目说明与发布流程，供 AI agent 与维护者使用。
    ```bash
    git add -A
    git commit -m "release vX.Y.Z"
-   # 提取 RELEASE_NOTES.md 顶部章节（最新版本）作为 tag message：
-   # Action 创建 GitHub Release 时直接使用 tag message 作为 notes，一步到位
-   VERSION="X.Y.Z"
-   awk -v ver="v${VERSION}" '
-     /^## / { if ($0 == "## " ver) { in_section = 1 } else if (in_section) { exit } }
-     in_section { print }
-   ' RELEASE_NOTES.md > /tmp/tag-notes.md
-   git tag -a "v${VERSION}" -F /tmp/tag-notes.md   # 必须用 -a 带 message 的 annotated tag
+   git tag vX.Y.Z
    git push origin main --tags
    ```
 
 4. **等待 GitHub Action 发布完成**（`publish.yml`）：
    - 矩阵构建并发布 5 个平台包（darwin-arm64/x64、linux-arm64/x64、win32-x64）
    - 发布主包 `agent-ssh-cli`
-   - 创建 GitHub Release，notes 直接取 tag message（即 RELEASE_NOTES.md 对应章节），无需二次编辑
-   - 检查：`gh run list`；确认：`npm view agent-ssh-cli@X.Y.Z version`
+   - 创建 GitHub Release：notes 从仓库内 `RELEASE_NOTES.md` 自动提取当前版本章节，无需二次编辑
+   - 检查：`gh run list`；确认：`npm view agent-ssh-cli@X.Y.Z version`；确认 notes：`gh release view vX.Y.Z`
 5. **更新本地 CLI 到最新版本**：发布完成后安装最新版并验证：
 
    ```bash
@@ -58,5 +51,5 @@ agent-ssh-cli 项目说明与发布流程，供 AI agent 与维护者使用。
 ## 注意事项
 
 - 平台包与主包发布均由 GitHub Action 完成，**不要在本地手动 `npm publish`**（本地 npm 无发布权限，且 Action 会处理 5 平台矩阵）。
-- tag 必须使用带 message 的 annotated tag（`git tag -a -F`）：`publish.yml` 创建 Release 时以 tag message 作为 notes；轻量 tag 的 notes 只有 commit 标题，发布后还需手动补充。
+- 轻量 tag 即可：`publish.yml` 的 create-release 直接从 `RELEASE_NOTES.md` 提取 notes，不依赖 tag message。
 - 版本号更新后需重新 `npm run build:native` 才能在本地验证 `--version`。
