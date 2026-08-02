@@ -26,6 +26,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use url::Url;
@@ -76,35 +77,41 @@ const HELP_LIST: &str = r#"
 
 const HELP_EXEC: &str = r#"
 用法:
-  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] [--pty|--no-pty] <connectionName> <command>
-  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] [--pty|--no-pty] --connection <name> (--command <command>|--command-file <path>) [--directory <dir>] [--timeout <ms>]
+  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] [--pty|--no-pty] [--json] <connectionName> <command>
+  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] [--pty|--no-pty] [--json] --connection <name> (--command <command>|--command-file <path>) [--directory <dir>] [--timeout <ms>]
   agentsshcli help exec
   agentsshcli --version
 
 说明:
   在远端执行命令。默认不分配伪终端，可通过 --pty 临时开启。
+  --json: 输出结构化 JSON，字段为 exitCode/stdout/stderr。
 "#;
 
 const HELP_UPLOAD: &str = r#"
 用法:
-  agentsshcli upload [--config <path>] [--no-cache] [--cache-ttl <ms>] <connectionName> <localPath> <remotePath>
-  agentsshcli upload [--config <path>] [--no-cache] [--cache-ttl <ms>] --connection <name> --local <path> --remote <path>
+  agentsshcli upload [--config <path>] [--no-cache] [--cache-ttl <ms>] [--timeout <ms>] [--json] [--recursive] <connectionName> <localPath> <remotePath>
+  agentsshcli upload [--config <path>] [--no-cache] [--cache-ttl <ms>] [--timeout <ms>] [--json] [--recursive] --connection <name> --local <path> --remote <path>
   agentsshcli help upload
   agentsshcli --version
 
 说明:
   上传本地文件到远端。默认使用 daemon 缓存，可通过 --no-cache 直连。
+  --timeout <ms>: 总超时毫秒值，默认不限制（大文件允许长时间运行）。
+  --recursive: 递归上传目录，保持相对路径。
+  --json: 输出结构化 JSON。
 "#;
-
 const HELP_DOWNLOAD: &str = r#"
 用法:
-  agentsshcli download [--config <path>] [--no-cache] [--cache-ttl <ms>] <connectionName> <remotePath> <localPath>
-  agentsshcli download [--config <path>] [--no-cache] [--cache-ttl <ms>] --connection <name> --remote <path> --local <path>
+  agentsshcli download [--config <path>] [--no-cache] [--cache-ttl <ms>] [--timeout <ms>] [--json] [--recursive] <connectionName> <remotePath> <localPath>
+  agentsshcli download [--config <path>] [--no-cache] [--cache-ttl <ms>] [--timeout <ms>] [--json] [--recursive] --connection <name> --remote <path> --local <path>
   agentsshcli help download
   agentsshcli --version
 
 说明:
   下载远端文件到本地。默认使用 daemon 缓存，可通过 --no-cache 直连。
+  --timeout <ms>: 总超时毫秒值，默认不限制（大文件允许长时间运行）。
+  --recursive: 递归下载目录，保持相对路径。
+  --json: 输出结构化 JSON。
 "#;
 
 const HELP_STOP_DAEMON: &str = r#"
@@ -213,8 +220,8 @@ struct ExecuteArgs {
     directory: Option<String>,
     timeout_ms: u64,
     pty: Option<bool>,
+    json_output: bool,
 }
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UploadResumeMeta {
@@ -229,6 +236,10 @@ struct TransferArgs {
     connection_name: String,
     local_path: String,
     remote_path: String,
+    // None 表示不限制总超时（大文件传输默认不设限），传入 --timeout 时限制。
+    timeout_ms: Option<u64>,
+    recursive: bool,
+    json_output: bool,
 }
 
 #[derive(Debug)]
@@ -243,9 +254,24 @@ trait SshStream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
 
 impl<T> SshStream for T where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
 
+// --json 模式下，错误输出也转为 JSON，由 main 统一格式化。
+static JSON_OUTPUT_MODE: AtomicBool = AtomicBool::new(false);
+
 fn main() {
-    if let Err(error) = run(env::args().skip(1).collect()) {
-        eprintln!("{}", error);
+    let argv: Vec<String> = env::args().skip(1).collect();
+    // 预扫描 --json：参数解析阶段的错误也按 JSON 格式输出（解析成功后会以 parsed 为准覆盖）。
+    if argv.iter().any(|item| item == "--json") {
+        JSON_OUTPUT_MODE.store(true, Ordering::Relaxed);
+    }
+    if let Err(error) = run(argv) {
+        if JSON_OUTPUT_MODE.load(Ordering::Relaxed) {
+            eprintln!(
+                "{}",
+                serde_json::json!({"exitCode": 1, "stdout": "", "stderr": error.to_string()})
+            );
+        } else {
+            eprintln!("{}", error);
+        }
         process::exit(1);
     }
 }
@@ -950,7 +976,6 @@ fn parse_global_args(argv: Vec<String>) -> AppResult<GlobalArgs> {
         match current.as_str() {
             "--help" | "-h" => help = true,
             "--version" | "-v" => version = true,
-            "--json" => {}
             "--no-cache" => no_cache = true,
             "--cache-ttl" => {
                 let value = args
@@ -1026,6 +1051,70 @@ fn take_positional(args: &mut Vec<String>, field_name: &str) -> AppResult<Option
     Ok(Some(value))
 }
 
+// 第一个位置参数（不以 - 开头的 token）的索引；全部是 flag 时返回 args.len()。
+fn positional_boundary(args: &[String]) -> usize {
+    args.iter()
+        .position(|item| !item.starts_with('-'))
+        .unwrap_or(args.len())
+}
+
+fn take_bool_flag(args: &mut Vec<String>, flag_name: &str) -> AppResult<bool> {
+    // 只解析第一个位置参数之前的 flag（本项目约定参数放在连接名前），
+    // 避免命令内容中的同名 token（如 --json）被误吞。
+    let boundary = positional_boundary(args);
+    let count = args[..boundary]
+        .iter()
+        .filter(|item| item.as_str() == flag_name)
+        .count();
+    if count > 1 {
+        return Err(AppError::new(format!("参数重复声明: {}", flag_name)));
+    }
+    if let Some(index) = args[..boundary].iter().position(|item| item == flag_name) {
+        args.remove(index);
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn take_bool_flag_pair(
+    args: &mut Vec<String>,
+    true_name: &str,
+    false_name: &str,
+) -> AppResult<Option<bool>> {
+    // 与 take_bool_flag 相同：只解析第一个位置参数之前的 flag。
+    let boundary = positional_boundary(args);
+    let true_count = args[..boundary]
+        .iter()
+        .filter(|item| item.as_str() == true_name)
+        .count();
+    let false_count = args[..boundary]
+        .iter()
+        .filter(|item| item.as_str() == false_name)
+        .count();
+    if true_count > 1 {
+        return Err(AppError::new(format!("参数重复声明: {}", true_name)));
+    }
+    if false_count > 1 {
+        return Err(AppError::new(format!("参数重复声明: {}", false_name)));
+    }
+    if true_count == 1 && false_count == 1 {
+        return Err(AppError::new(format!(
+            "{} 和 {} 只能选择一个",
+            true_name, false_name
+        )));
+    }
+    if let Some(index) = args[..boundary].iter().position(|item| item == true_name) {
+        args.remove(index);
+        return Ok(Some(true));
+    }
+    if let Some(index) = args[..boundary].iter().position(|item| item == false_name) {
+        args.remove(index);
+        return Ok(Some(false));
+    }
+    Ok(None)
+}
+
+
 fn ensure_no_mixed(
     named: &Option<String>,
     positional: &Option<String>,
@@ -1068,14 +1157,18 @@ fn parse_execute_args(argv: Vec<String>) -> AppResult<ExecuteArgs> {
             directory: None,
             timeout_ms: 30000,
             pty: None,
+            json_output: false,
         });
     }
     let mut args = global.args.clone();
+    // 先提取全部命名参数，再解析布尔参数（只识别位置参数之前的 flag），
+    // 避免命令内容中的同名 token（如 --json）被误吞。
     let connection_option = take_option(&mut args, &["--connection", "-c"])?;
     let command_option = take_option(&mut args, &["--command"])?;
     let command_file = take_option(&mut args, &["--command-file"])?;
     let directory = take_option(&mut args, &["--directory", "-d"])?;
     let timeout_value = take_option(&mut args, &["--timeout", "-t"])?;
+    let json_output = take_bool_flag(&mut args, "--json")?;
     let pty = take_bool_flag_pair(&mut args, "--pty", "--no-pty")?;
     let connection_positional = take_positional(&mut args, "connectionName")?;
     let command_positional = take_positional(&mut args, "command")?;
@@ -1110,54 +1203,8 @@ fn parse_execute_args(argv: Vec<String>) -> AppResult<ExecuteArgs> {
         directory,
         timeout_ms,
         pty,
+        json_output,
     })
-}
-
-fn take_bool_flag_pair(
-    args: &mut Vec<String>,
-    true_name: &str,
-    false_name: &str,
-) -> AppResult<Option<bool>> {
-    let true_count = args
-        .iter()
-        .filter(|item| item.as_str() == true_name)
-        .count();
-    let false_count = args
-        .iter()
-        .filter(|item| item.as_str() == false_name)
-        .count();
-    if true_count > 1 {
-        return Err(AppError::new(format!("参数重复声明: {}", true_name)));
-    }
-    if false_count > 1 {
-        return Err(AppError::new(format!("参数重复声明: {}", false_name)));
-    }
-    if true_count == 1 && false_count == 1 {
-        return Err(AppError::new(format!(
-            "{} 和 {} 只能选择一个",
-            true_name, false_name
-        )));
-    }
-    if let Some(index) = args.iter().position(|item| item == true_name) {
-        args.remove(index);
-        return Ok(Some(true));
-    }
-    if let Some(index) = args.iter().position(|item| item == false_name) {
-        args.remove(index);
-        return Ok(Some(false));
-    }
-    Ok(None)
-}
-
-fn resolve_value(
-    args: &mut Vec<String>,
-    names: &[&str],
-    field_name: &str,
-) -> AppResult<Option<String>> {
-    match take_option(args, names)? {
-        Some(value) => Ok(Some(value)),
-        None => take_positional(args, field_name),
-    }
 }
 
 fn parse_transfer_args(argv: Vec<String>, mode: &str) -> AppResult<TransferArgs> {
@@ -1168,19 +1215,42 @@ fn parse_transfer_args(argv: Vec<String>, mode: &str) -> AppResult<TransferArgs>
             connection_name: String::new(),
             local_path: String::new(),
             remote_path: String::new(),
+            timeout_ms: None,
+            recursive: false,
+            json_output: false,
         });
     }
     let mut args = global.args.clone();
-    let connection_name = resolve_value(&mut args, &["--connection", "-c"], "connectionName")?;
-    let (local_path, remote_path) = if mode == "upload" {
+    // 先提取全部命名参数，再解析布尔参数（只识别位置参数之前的 flag），
+    // 最后补位置参数，避免路径中的同名 token 被误吞。
+    let connection_named = take_option(&mut args, &["--connection", "-c"])?;
+    let timeout_value = take_option(&mut args, &["--timeout", "-t"])?;
+    let (local_named, remote_named) = if mode == "upload" {
         (
-            resolve_value(&mut args, &["--local", "-l"], "localPath")?,
-            resolve_value(&mut args, &["--remote", "-r"], "remotePath")?,
+            take_option(&mut args, &["--local", "-l"])?,
+            take_option(&mut args, &["--remote", "-r"])?,
         )
     } else {
-        let remote = resolve_value(&mut args, &["--remote", "-r"], "remotePath")?;
-        let local = resolve_value(&mut args, &["--local", "-l"], "localPath")?;
-        (local, remote)
+        (
+            take_option(&mut args, &["--remote", "-r"])?,
+            take_option(&mut args, &["--local", "-l"])?,
+        )
+    };
+    let json_output = take_bool_flag(&mut args, "--json")?;
+    let recursive = take_bool_flag(&mut args, "--recursive")?;
+    // 位置参数按字段顺序解析（connection → local → remote），命名参数已占用时跳过，
+    // 与原 resolve_value 语义一致：如 `--connection c /a /b` 中 /a /b 归 local/remote。
+    let connection_name = match connection_named {
+        Some(name) => Some(name),
+        None => take_positional(&mut args, "connectionName")?,
+    };
+    let local_path = match local_named {
+        Some(path) => Some(path),
+        None => take_positional(&mut args, "localPath")?,
+    };
+    let remote_path = match remote_named {
+        Some(path) => Some(path),
+        None => take_positional(&mut args, "remotePath")?,
     };
     ensure_no_unknown_options(&args)?;
     ensure_no_extra_positionals(&args)?;
@@ -1193,11 +1263,18 @@ fn parse_transfer_args(argv: Vec<String>, mode: &str) -> AppResult<TransferArgs>
     let Some(remote_path) = remote_path else {
         return Err(AppError::new("缺少必填参数，使用 --help 查看说明"));
     };
+    let timeout_ms = match timeout_value {
+        Some(value) => Some(normalize_positive_u64(&value, "timeout 必须是正整数毫秒值")?),
+        None => None,
+    };
     Ok(TransferArgs {
         global,
         connection_name,
         local_path,
         remote_path,
+        timeout_ms,
+        recursive,
+        json_output,
     })
 }
 
@@ -1209,22 +1286,28 @@ fn run_list(argv: Vec<String>) -> AppResult<()> {
     if global.version {
         return print_version();
     }
-    if !global.args.is_empty() {
+    let mut args = global.args.clone();
+    // 兼容 list --json 用法：当前 list 默认输出即为 JSON。
+    let _ = take_bool_flag(&mut args, "--json")?;
+    if !args.is_empty() {
         return Err(AppError::new(format!(
             "agentsshcli list 不接受位置参数: {}",
-            global.args.join(" ")
+            args.join(" ")
         )));
     }
     let configs = load_config(&global.config_path)?;
     let output: Vec<serde_json::Value> = configs
         .iter()
         .map(|item| {
-            serde_json::json!({
-                "name": item.name,
-                "host": item.host,
-                "port": item.port,
-                "username": item.username,
-            })
+            let mut entry = serde_json::Map::new();
+            entry.insert("name".to_string(), serde_json::json!(item.name));
+            entry.insert("host".to_string(), serde_json::json!(item.host));
+            entry.insert("port".to_string(), serde_json::json!(item.port));
+            entry.insert("username".to_string(), serde_json::json!(item.username));
+            if let Some(jump) = item.jump_host.as_deref() {
+                entry.insert("jumpHost".to_string(), serde_json::json!(jump));
+            }
+            serde_json::Value::Object(entry)
         })
         .collect();
     println!("{}", serde_json::to_string_pretty(&output)?);
@@ -1258,6 +1341,7 @@ fn run_exec(argv: Vec<String>) -> AppResult<()> {
     if parsed.global.version {
         return print_version();
     }
+    JSON_OUTPUT_MODE.store(parsed.json_output, Ordering::Relaxed);
     prepare_connection_config(&parsed.global.config_path, &parsed.connection_name)?;
     let configs = load_config_for_connection(&parsed.global.config_path, &parsed.connection_name)?;
     let connection = find_connection(&configs, &parsed.connection_name)?;
@@ -1267,7 +1351,7 @@ fn run_exec(argv: Vec<String>) -> AppResult<()> {
         Some(ref directory) => format!("cd -- {} && {}", shell_json_quote(directory)?, command),
         None => command.clone(),
     };
-    let result = if parsed.global.no_cache {
+    let output = if parsed.global.no_cache {
         execute_remote_command(
             &configs,
             connection,
@@ -1276,10 +1360,36 @@ fn run_exec(argv: Vec<String>) -> AppResult<()> {
             resolve_pty(connection, parsed.pty),
         )?
     } else {
-        request_daemon_execute(&parsed, &command)?
+        let response = request_daemon_execute(&parsed, &command)?;
+        ExecOutput {
+            exit_code: response.exit_code.unwrap_or(0),
+            stdout: response.stdout.unwrap_or_default(),
+            stderr: response.stderr.unwrap_or_default(),
+        }
     };
-    if !result.is_empty() {
-        println!("{}", result);
+    if parsed.json_output {
+        println!(
+            "{}",
+            serde_json::json!({"exitCode": output.exit_code, "stdout": output.stdout, "stderr": output.stderr})
+        );
+        // JSON 模式下远端命令非零退出：进程退出码仍为 1（exitCode 字段已反映真实退出码），
+        // 便于脚本按退出码判断成败；此处直接退出避免 main 重复输出错误 JSON。
+        if output.exit_code != 0 {
+            process::exit(1);
+        }
+    } else if output.exit_code != 0 {
+        // 文本模式保持原有行为：stdout/stderr 与退出码一起作为错误信息输出。
+        let mut parts = Vec::new();
+        if !output.stdout.is_empty() {
+            parts.push(output.stdout);
+        }
+        if !output.stderr.is_empty() {
+            parts.push(format!("[stderr]\n{}", output.stderr));
+        }
+        parts.push(format!("[exit code] {}", output.exit_code));
+        return Err(AppError::new(parts.join("\n")));
+    } else if !output.stdout.is_empty() {
+        println!("{}", output.stdout);
     }
     Ok(())
 }
@@ -1292,16 +1402,37 @@ fn run_upload(argv: Vec<String>) -> AppResult<()> {
     if parsed.global.version {
         return print_version();
     }
+    JSON_OUTPUT_MODE.store(parsed.json_output, Ordering::Relaxed);
     prepare_connection_config(&parsed.global.config_path, &parsed.connection_name)?;
     let configs = load_config_for_connection(&parsed.global.config_path, &parsed.connection_name)?;
     let connection = find_connection(&configs, &parsed.connection_name)?;
     if parsed.global.no_cache {
         let local_path = path_absolute_from(Path::new(&parsed.local_path), &env::current_dir()?)?;
-        upload_file(&configs, connection, &local_path, &parsed.remote_path)?;
+        if parsed.recursive {
+            upload_dir(
+                &configs,
+                connection,
+                &local_path,
+                &parsed.remote_path,
+                parsed.timeout_ms,
+            )?;
+        } else {
+            upload_file(
+                &configs,
+                connection,
+                &local_path,
+                &parsed.remote_path,
+                parsed.timeout_ms,
+            )?;
+        }
     } else {
         request_daemon_transfer(&parsed, "upload")?;
     }
-    println!("File uploaded successfully");
+    if parsed.json_output {
+        println!("{}", serde_json::json!({"exitCode": 0, "stdout": "File uploaded successfully", "stderr": ""}));
+    } else {
+        println!("File uploaded successfully");
+    }
     Ok(())
 }
 
@@ -1313,6 +1444,7 @@ fn run_download(argv: Vec<String>) -> AppResult<()> {
     if parsed.global.version {
         return print_version();
     }
+    JSON_OUTPUT_MODE.store(parsed.json_output, Ordering::Relaxed);
     prepare_connection_config(&parsed.global.config_path, &parsed.connection_name)?;
     let configs = load_config_for_connection(&parsed.global.config_path, &parsed.connection_name)?;
     let connection = find_connection(&configs, &parsed.connection_name)?;
@@ -1321,17 +1453,31 @@ fn run_download(argv: Vec<String>) -> AppResult<()> {
         if let Some(parent) = local_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        download_file(
-            &configs,
-            connection,
-            &parsed.remote_path,
-            &local_path,
-            30000,
-        )?;
+        if parsed.recursive {
+            download_dir(
+                &configs,
+                connection,
+                &parsed.remote_path,
+                &local_path,
+                parsed.timeout_ms,
+            )?;
+        } else {
+            download_file(
+                &configs,
+                connection,
+                &parsed.remote_path,
+                &local_path,
+                parsed.timeout_ms,
+            )?;
+        }
     } else {
         request_daemon_transfer(&parsed, "download")?;
     }
-    println!("File downloaded successfully");
+    if parsed.json_output {
+        println!("{}", serde_json::json!({"exitCode": 0, "stdout": "File downloaded successfully", "stderr": ""}));
+    } else {
+        println!("File downloaded successfully");
+    }
     Ok(())
 }
 
@@ -1540,7 +1686,8 @@ async fn connect_russh_over_stream(
     stream: Box<dyn SshStream>,
 ) -> AppResult<client::Handle<RusshClient>> {
     let config = client::Config {
-        inactivity_timeout: Some(Duration::from_secs(30)),
+        // SSH 连接空闲超时：30s 过短，慢速大文件传输或长任务可能被误断，放宽到 5 分钟。
+        inactivity_timeout: Some(Duration::from_secs(300)),
         preferred: Preferred {
             kex: Cow::Owned(vec![
                 russh::kex::CURVE25519,
@@ -1664,12 +1811,20 @@ async fn authenticate_russh(
     Ok(())
 }
 
+// 远端命令执行结果：命令正常完成（无论退出码）时的结构化输出；
+// 会话异常/连接失败仍以 Err 返回。
+struct ExecOutput {
+    exit_code: u32,
+    stdout: String,
+    stderr: String,
+}
+
 async fn execute_remote_command_with_session_async(
     session: &client::Handle<RusshClient>,
     connection: &Connection,
     remote_command: &str,
     pty: bool,
-) -> AppResult<String> {
+) -> AppResult<ExecOutput> {
     let mut channel = session.channel_open_session().await.map_err(|error| {
         AppError::new(format!("连接 {} 打开会话失败: {}", connection.name, error))
     })?;
@@ -1691,29 +1846,58 @@ async fn execute_remote_command_with_session_async(
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let mut exit_status = None;
-    while let Some(msg) = channel.wait().await {
-        match msg {
-            ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
-            ChannelMsg::ExtendedData { data, .. } => stderr.extend_from_slice(&data),
-            ChannelMsg::ExitStatus { exit_status: code } => exit_status = Some(code),
-            _ => {}
+    // 收到 ExitStatus 后，若远端仍有后台进程持有通道 stdout，SSH 服务端不会发送 EOF，
+    // 通道永不关闭。此时最多再等 EOF 一小段时间，超时即视为命令已结束，
+    // 避免被后台进程拖挂到总超时。
+    const EXIT_STATUS_EOF_TIMEOUT_MS: u64 = 2000;
+    let mut after_exit_status = false;
+    loop {
+        let wait_result = if after_exit_status {
+            tokio::time::timeout(
+                Duration::from_millis(EXIT_STATUS_EOF_TIMEOUT_MS),
+                channel.wait(),
+            )
+            .await
+        } else {
+            Ok(channel.wait().await)
+        };
+        match wait_result {
+            Ok(Some(ChannelMsg::Data { data })) => stdout.extend_from_slice(&data),
+            Ok(Some(ChannelMsg::ExtendedData { data, .. })) => stderr.extend_from_slice(&data),
+            Ok(Some(ChannelMsg::ExitStatus { exit_status: code })) => {
+                exit_status = Some(code);
+                after_exit_status = true;
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => break,
+            Err(_) => break,
         }
     }
     let stdout = String::from_utf8_lossy(&stdout).trim_end().to_string();
     let stderr = String::from_utf8_lossy(&stderr).trim_end().to_string();
-    let code = exit_status.unwrap_or(0);
-    if code != 0 {
-        let mut parts = Vec::new();
-        if !stdout.is_empty() {
-            parts.push(stdout);
+    let code = match exit_status {
+        Some(code) => code,
+        None => {
+            // 通道关闭但未收到退出状态：远端会话被异常终止
+            // （例如 pkill -f 匹配到执行命令的 shell 自身），
+            // 此时 stdout 不完整，不能静默当作成功返回。
+            let mut parts = Vec::new();
+            if !stdout.is_empty() {
+                parts.push(stdout);
+            }
+            if !stderr.is_empty() {
+                parts.push(format!("[stderr]\n{}", stderr));
+            }
+            parts.push("[remote] 会话异常终止（无退出状态）".to_string());
+            return Err(AppError::new(parts.join("\n")));
         }
-        if !stderr.is_empty() {
-            parts.push(format!("[stderr]\n{}", stderr));
-        }
-        parts.push(format!("[exit code] {}", code));
-        return Err(AppError::new(parts.join("\n")));
-    }
-    Ok(stdout)
+    };
+    // 非零退出码不视为 Err：命令已正常完成，由调用方决定如何呈现（文本模式报错、JSON 模式如实返回）。
+    Ok(ExecOutput {
+        exit_code: code,
+        stdout,
+        stderr,
+    })
 }
 
 async fn execute_remote_command_async(
@@ -1721,7 +1905,7 @@ async fn execute_remote_command_async(
     connection: &Connection,
     remote_command: &str,
     pty: bool,
-) -> AppResult<String> {
+) -> AppResult<ExecOutput> {
     let session = connect_russh(configs, connection).await?;
     let result =
         execute_remote_command_with_session_async(&session, connection, remote_command, pty).await;
@@ -1737,7 +1921,7 @@ fn execute_remote_command(
     remote_command: &str,
     timeout_ms: u64,
     pty: bool,
-) -> AppResult<String> {
+) -> AppResult<ExecOutput> {
     run_with_timeout(
         timeout_ms,
         execute_remote_command_async(configs, connection, remote_command, pty),
@@ -1888,7 +2072,9 @@ async fn upload_file_once(
 
     let mut buffer = vec![0_u8; TRANSFER_CHUNK_BYTES];
     let mut uploaded = resume_offset;
+    // 起点输出（0% 或续传点）；空文件场景也在这里显示 100%。
     print_upload_progress(uploaded, file_size, attempt)?;
+    let mut last_percent = u64::MAX;
     loop {
         let read_bytes = local_file.read(&mut buffer).await?;
         if read_bytes == 0 {
@@ -1897,7 +2083,16 @@ async fn upload_file_once(
         remote_file.write_all(&buffer[..read_bytes]).await?;
         remote_file.flush().await?;
         uploaded += read_bytes as u64;
-        print_upload_progress(uploaded, file_size, attempt)?;
+        // 仅在百分比变化时输出，避免大文件逐 chunk 刷屏。
+        let percent = if file_size == 0 {
+            100
+        } else {
+            uploaded.saturating_mul(100) / file_size
+        };
+        if percent != last_percent {
+            last_percent = percent;
+            print_upload_progress(uploaded, file_size, attempt)?;
+        }
     }
 
     remote_file.shutdown().await?;
@@ -2006,6 +2201,56 @@ fn print_upload_progress(uploaded: u64, total: u64, attempt: usize) -> AppResult
     Ok(())
 }
 
+fn print_download_progress(downloaded: u64, total: u64) -> AppResult<()> {
+    if total == 0 {
+        eprintln!("下载进度: 100% (0/0 bytes)");
+        return Ok(());
+    }
+    let percent = downloaded.saturating_mul(100) / total;
+    eprintln!("下载进度: {}% ({}/{} bytes)", percent, downloaded, total);
+    Ok(())
+}
+
+fn temporary_local_part_path(local_path: &Path) -> PathBuf {
+    let mut name = local_path.as_os_str().to_owned();
+    name.push(".part");
+    PathBuf::from(name)
+}
+
+fn temporary_local_meta_path(local_path: &Path) -> PathBuf {
+    let mut name = local_path.as_os_str().to_owned();
+    name.push(".part.meta");
+    PathBuf::from(name)
+}
+
+// 本地 .part 续传判定：meta 内容与远端文件特征一致才续传，否则删除 .part 重新下载。
+fn resolve_download_resume_offset(
+    part_path: &Path,
+    meta_path: &Path,
+    resume_meta: &UploadResumeMeta,
+) -> AppResult<Option<u64>> {
+    let expected = serde_json::to_vec(resume_meta)?;
+    let current = match fs::read(meta_path) {
+        Ok(bytes) => bytes,
+        Err(_) => return Ok(None),
+    };
+    if current != expected {
+        let _ = fs::remove_file(part_path);
+        let _ = fs::remove_file(meta_path);
+        return Ok(None);
+    }
+    let part_size = match fs::metadata(part_path) {
+        Ok(metadata) => metadata.len(),
+        Err(_) => return Ok(None),
+    };
+    if part_size > resume_meta.file_size {
+        let _ = fs::remove_file(part_path);
+        let _ = fs::remove_file(meta_path);
+        return Ok(None);
+    }
+    Ok(Some(part_size))
+}
+
 async fn download_file_with_session_async(
     session: &client::Handle<RusshClient>,
     connection: &Connection,
@@ -2013,16 +2258,86 @@ async fn download_file_with_session_async(
     local_path: &Path,
 ) -> AppResult<()> {
     let sftp = open_sftp_session(session, connection).await?;
+    let remote_metadata = sftp
+        .metadata(remote_path.to_string())
+        .await
+        .map_err(|error| {
+            AppError::new(format!(
+                "连接 {} 读取远端文件信息失败: {}",
+                connection.name, error
+            ))
+        })?;
+    let remote_size = remote_metadata.len();
+    let modified_ms = remote_metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    // 复用 UploadResumeMeta 结构：字段与下载续传元数据一致。
+    let resume_meta = UploadResumeMeta {
+        file_size: remote_size,
+        modified_ms,
+        chunk_bytes: TRANSFER_CHUNK_BYTES,
+    };
+    let part_path = temporary_local_part_path(local_path);
+    let meta_path = temporary_local_meta_path(local_path);
+    let resume_offset =
+        resolve_download_resume_offset(&part_path, &meta_path, &resume_meta)?.unwrap_or(0);
     let mut remote_file = sftp.open(remote_path.to_string()).await.map_err(|error| {
         AppError::new(format!(
             "连接 {} 打开远端文件失败: {}",
             connection.name, error
         ))
     })?;
-    let mut local_file = tokio::fs::File::create(local_path).await?;
-    tokio::io::copy(&mut remote_file, &mut local_file).await?;
+    let mut local_file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&part_path)
+        .await?;
+    if resume_offset > 0 {
+        local_file.seek(SeekFrom::Start(resume_offset)).await?;
+        remote_file.seek(SeekFrom::Start(resume_offset)).await?;
+        eprintln!(
+            "发现本地临时文件，断点续传: {}/{} bytes",
+            resume_offset, remote_size
+        );
+    } else {
+        local_file.set_len(0).await?;
+    }
+    // 下载前写入元数据，中断后下次可据此判定续传。
+    fs::write(&meta_path, serde_json::to_vec(&resume_meta)?)?;
+    let mut buffer = vec![0_u8; TRANSFER_CHUNK_BYTES];
+    let mut downloaded = resume_offset;
+    print_download_progress(downloaded, remote_size)?;
+    let mut last_percent = u64::MAX;
+    loop {
+        let read_bytes = remote_file.read(&mut buffer).await?;
+        if read_bytes == 0 {
+            break;
+        }
+        local_file.write_all(&buffer[..read_bytes]).await?;
+        downloaded += read_bytes as u64;
+        let percent = if remote_size == 0 {
+            100
+        } else {
+            downloaded.saturating_mul(100) / remote_size
+        };
+        if percent != last_percent {
+            last_percent = percent;
+            print_download_progress(downloaded, remote_size)?;
+        }
+    }
     local_file.shutdown().await?;
     let _ = sftp.close().await;
+    if downloaded != remote_size {
+        return Err(AppError::new(format!(
+            "下载大小不一致: 期望 {} bytes，实际 {} bytes",
+            remote_size, downloaded
+        )));
+    }
+    tokio::fs::rename(&part_path, local_path).await?;
+    let _ = fs::remove_file(&meta_path);
     Ok(())
 }
 
@@ -2061,15 +2376,23 @@ fn upload_file(
     connection: &Connection,
     local_path: &Path,
     remote_path: &str,
+    timeout_ms: Option<u64>,
 ) -> AppResult<()> {
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|error| AppError::new(format!("创建 tokio runtime 失败: {}", error)))?;
-    runtime.block_on(upload_file_async(
-        configs,
-        connection,
-        local_path,
-        remote_path,
-    ))
+    match timeout_ms {
+        Some(timeout_ms) => block_with_timeout(
+            &runtime,
+            timeout_ms,
+            upload_file_async(configs, connection, local_path, remote_path),
+        ),
+        None => runtime.block_on(upload_file_async(
+            configs,
+            connection,
+            local_path,
+            remote_path,
+        )),
+    }
 }
 
 fn download_file(
@@ -2077,12 +2400,223 @@ fn download_file(
     connection: &Connection,
     remote_path: &str,
     local_path: &Path,
-    timeout_ms: u64,
+    timeout_ms: Option<u64>,
 ) -> AppResult<()> {
-    run_with_timeout(
-        timeout_ms,
-        download_file_async(configs, connection, remote_path, local_path),
-    )
+    match timeout_ms {
+        Some(timeout_ms) => run_with_timeout(
+            timeout_ms,
+            download_file_async(configs, connection, remote_path, local_path),
+        ),
+        None => {
+            let runtime = tokio::runtime::Runtime::new()
+                .map_err(|error| AppError::new(format!("创建 tokio runtime 失败: {}", error)))?;
+            runtime.block_on(download_file_async(
+                configs,
+                connection,
+                remote_path,
+                local_path,
+            ))
+        }
+    }
+}
+
+// 远端目录逐级创建，已存在的层级忽略错误。
+async fn ensure_remote_dir_all(sftp: &SftpSession, remote_dir: &str) -> AppResult<()> {
+    let mut current = String::new();
+    if remote_dir.starts_with('/') {
+        current.push('/');
+    }
+    for part in remote_dir.split('/').filter(|part| !part.is_empty()) {
+        if !current.is_empty() && !current.ends_with('/') {
+            current.push('/');
+        }
+        current.push_str(part);
+        let _ = sftp.create_dir(current.clone()).await;
+    }
+    Ok(())
+}
+
+async fn upload_dir_with_session_async(
+    session: &client::Handle<RusshClient>,
+    connection: &Connection,
+    local_dir: &Path,
+    remote_dir: &str,
+) -> AppResult<()> {
+    // daemon 模式也做目录检查（no-cache 侧在 upload_dir 已检查），保证两模式报错一致。
+    if !local_dir.is_dir() {
+        return Err(AppError::new(format!(
+            "--recursive 上传需要本地目录路径，当前为: {}",
+            local_dir.display()
+        )));
+    }
+    let sftp = open_sftp_session(session, connection).await?;
+    ensure_remote_dir_all(&sftp, remote_dir).await?;
+    let _ = sftp.close().await;
+    let entries = fs::read_dir(local_dir)?;
+    for entry in entries {
+        let path = entry?.path();
+        let name = path
+            .file_name()
+            .and_then(|item| item.to_str())
+            .ok_or_else(|| AppError::new("本地路径包含非 UTF-8 文件名"))?
+            .to_string();
+        let remote_child = format!("{}/{}", remote_dir.trim_end_matches('/'), name);
+        let file_type = fs::symlink_metadata(&path)?.file_type();
+        if file_type.is_dir() {
+            Box::pin(upload_dir_with_session_async(
+                session,
+                connection,
+                &path,
+                &remote_child,
+            ))
+            .await?;
+        } else if file_type.is_symlink() {
+            // 符号链接不递归跟随（防目录循环）：指向目录的链接跳过，指向文件的链接上传其内容。
+            let target_is_dir = fs::metadata(&path)
+                .map(|meta| meta.is_dir())
+                .unwrap_or(true);
+            if target_is_dir {
+                continue;
+            }
+            upload_file_with_session_async(session, connection, &path, &remote_child).await?;
+        } else {
+            upload_file_with_session_async(session, connection, &path, &remote_child).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn download_dir_with_session_async(
+    session: &client::Handle<RusshClient>,
+    connection: &Connection,
+    remote_dir: &str,
+    local_dir: &Path,
+) -> AppResult<()> {
+    fs::create_dir_all(local_dir)?;
+    let sftp = open_sftp_session(session, connection).await?;
+    let remote_meta = sftp.metadata(remote_dir.to_string()).await.map_err(|error| {
+        AppError::new(format!(
+            "连接 {} 读取远端目录信息失败: {}",
+            connection.name, error
+        ))
+    })?;
+    if !remote_meta.is_dir() {
+        let _ = sftp.close().await;
+        return Err(AppError::new(format!(
+            "--recursive 下载需要远端目录路径: {}",
+            remote_dir
+        )));
+    }
+    let entries = sftp.read_dir(remote_dir.to_string()).await.map_err(|error| {
+        AppError::new(format!(
+            "连接 {} 读取远端目录失败: {}",
+            connection.name, error
+        ))
+    })?;
+    let _ = sftp.close().await;
+    for entry in entries {
+        let name = entry.file_name();
+        if name == "." || name == ".." {
+            continue;
+        }
+        let remote_child = format!("{}/{}", remote_dir.trim_end_matches('/'), name);
+        let local_child = local_dir.join(&name);
+        if entry.file_type().is_dir() {
+            Box::pin(download_dir_with_session_async(
+                session,
+                connection,
+                &remote_child,
+                &local_child,
+            ))
+            .await?;
+        } else if entry.file_type().is_file() {
+            download_file_with_session_async(session, connection, &remote_child, &local_child).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn upload_dir_async(
+    configs: &[Connection],
+    connection: &Connection,
+    local_dir: &Path,
+    remote_dir: &str,
+) -> AppResult<()> {
+    let session = connect_russh(configs, connection).await?;
+    let result = upload_dir_with_session_async(&session, connection, local_dir, remote_dir).await;
+    let _ = session
+        .disconnect(Disconnect::ByApplication, "", "English")
+        .await;
+    result
+}
+
+async fn download_dir_async(
+    configs: &[Connection],
+    connection: &Connection,
+    remote_dir: &str,
+    local_dir: &Path,
+) -> AppResult<()> {
+    let session = connect_russh(configs, connection).await?;
+    let result = download_dir_with_session_async(&session, connection, remote_dir, local_dir).await;
+    let _ = session
+        .disconnect(Disconnect::ByApplication, "", "English")
+        .await;
+    result
+}
+
+fn upload_dir(
+    configs: &[Connection],
+    connection: &Connection,
+    local_dir: &Path,
+    remote_dir: &str,
+    timeout_ms: Option<u64>,
+) -> AppResult<()> {
+    if !local_dir.is_dir() {
+        return Err(AppError::new(format!(
+            "--recursive 上传需要本地目录路径，当前为: {}",
+            local_dir.display()
+        )));
+    }
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|error| AppError::new(format!("创建 tokio runtime 失败: {}", error)))?;
+    match timeout_ms {
+        Some(timeout_ms) => block_with_timeout(
+            &runtime,
+            timeout_ms,
+            upload_dir_async(configs, connection, local_dir, remote_dir),
+        ),
+        None => runtime.block_on(upload_dir_async(
+            configs,
+            connection,
+            local_dir,
+            remote_dir,
+        )),
+    }
+}
+
+fn download_dir(
+    configs: &[Connection],
+    connection: &Connection,
+    remote_dir: &str,
+    local_dir: &Path,
+    timeout_ms: Option<u64>,
+) -> AppResult<()> {
+    match timeout_ms {
+        Some(timeout_ms) => run_with_timeout(
+            timeout_ms,
+            download_dir_async(configs, connection, remote_dir, local_dir),
+        ),
+        None => {
+            let runtime = tokio::runtime::Runtime::new()
+                .map_err(|error| AppError::new(format!("创建 tokio runtime 失败: {}", error)))?;
+            runtime.block_on(download_dir_async(
+                configs,
+                connection,
+                remote_dir,
+                local_dir,
+            ))
+        }
+    }
 }
 
 fn run_with_timeout<T, F>(timeout_ms: u64, future: F) -> AppResult<T>
@@ -2195,6 +2729,82 @@ mod tests {
     }
 
     #[test]
+    fn parse_exec_supports_json_flag() {
+        let parsed = parse_execute_args(vec![
+            "--json".into(),
+            "server".into(),
+            "pwd".into(),
+        ])
+        .unwrap();
+        assert!(parsed.json_output);
+    }
+
+    #[test]
+    fn parse_exec_does_not_swallow_flag_inside_quoted_command() {
+        // 命令内容整体作为一个 token 时（引号包裹），其中的 --json 不被解析为参数。
+        let parsed = parse_execute_args(vec!["server".into(), "echo --json".into()]).unwrap();
+        assert!(!parsed.json_output);
+        assert_eq!(parsed.command, "echo --json");
+    }
+
+    #[test]
+    fn parse_exec_rejects_flag_after_positional() {
+        // 位置参数（连接名/命令）之后的 flag 不再被静默吞掉，而是明确报错。
+        let err = parse_execute_args(vec![
+            "server".into(),
+            "pwd".into(),
+            "--json".into(),
+        ])
+        .unwrap_err();
+        assert!(err.to_string().contains("不支持的参数: --json"));
+    }
+
+    #[test]
+    fn parse_transfer_rejects_flag_after_positional() {
+        let err = parse_transfer_args(
+            vec![
+                "server".into(),
+                "/tmp/a".into(),
+                "/tmp/b".into(),
+                "--json".into(),
+            ],
+            "upload",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("不支持的参数: --json"));
+    }
+
+    #[test]
+    fn parse_transfer_supports_recursive_flag() {
+        let parsed = parse_transfer_args(
+            vec![
+                "--recursive".into(),
+                "server".into(),
+                "/tmp/a".into(),
+                "/tmp/b".into(),
+            ],
+            "upload",
+        )
+        .unwrap();
+        assert!(parsed.recursive);
+    }
+
+    #[test]
+    fn parse_transfer_supports_json_flag() {
+        let parsed = parse_transfer_args(
+            vec![
+                "--json".into(),
+                "server".into(),
+                "/tmp/a".into(),
+                "/tmp/b".into(),
+            ],
+            "upload",
+        )
+        .unwrap();
+        assert!(parsed.json_output);
+    }
+
+    #[test]
     fn parse_exec_rejects_conflicting_pty_flags() {
         let err = parse_execute_args(vec![
             "--pty".into(),
@@ -2204,6 +2814,70 @@ mod tests {
         ])
         .unwrap_err();
         assert!(err.to_string().contains("--pty 和 --no-pty"));
+    }
+
+    #[test]
+    fn parse_transfer_mixed_named_and_positional() {
+        // 命名参数占用 connection 后，位置参数顺延给 local/remote（原 resolve_value 语义）。
+        let parsed = parse_transfer_args(
+            vec![
+                "--connection".into(),
+                "server".into(),
+                "/tmp/a".into(),
+                "/tmp/b".into(),
+            ],
+            "upload",
+        )
+        .unwrap();
+        assert_eq!(parsed.connection_name, "server");
+        assert_eq!(parsed.local_path, "/tmp/a");
+        assert_eq!(parsed.remote_path, "/tmp/b");
+    }
+
+    #[test]
+    fn parse_transfer_defaults_timeout_to_none() {
+        let parsed = parse_transfer_args(
+            vec!["server".into(), "/tmp/a".into(), "/tmp/b".into()],
+            "upload",
+        )
+        .unwrap();
+        assert_eq!(parsed.connection_name, "server");
+        assert_eq!(parsed.timeout_ms, None);
+    }
+
+    #[test]
+    fn parse_transfer_supports_timeout_option() {
+        let parsed = parse_transfer_args(
+            vec![
+                "--timeout".into(),
+                "120000".into(),
+                "--connection".into(),
+                "server".into(),
+                "--local".into(),
+                "/tmp/a".into(),
+                "--remote".into(),
+                "/tmp/b".into(),
+            ],
+            "download",
+        )
+        .unwrap();
+        assert_eq!(parsed.timeout_ms, Some(120000));
+    }
+
+    #[test]
+    fn parse_transfer_rejects_zero_timeout() {
+        let err = parse_transfer_args(
+            vec![
+                "--timeout".into(),
+                "0".into(),
+                "server".into(),
+                "/tmp/a".into(),
+                "/tmp/b".into(),
+            ],
+            "upload",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("timeout 必须是正整数毫秒值"));
     }
 
     #[test]
@@ -2371,11 +3045,31 @@ mod tests {
     }
 
     #[test]
+    fn daemon_response_round_trips_exec_fields() {
+        // exec 专用字段（exit_code/stderr）序列化往返一致，防协议回归。
+        let response = DaemonResponse {
+            ok: true,
+            message: None,
+            stdout: Some("out".to_string()),
+            exit_code: Some(3),
+            stderr: Some("err".to_string()),
+            ..Default::default()
+        };
+        let mut bytes = Vec::new();
+        write_daemon_response(&mut bytes, &response).unwrap();
+        let parsed = read_daemon_response(&mut bytes.as_slice()).unwrap();
+        assert_eq!(parsed.exit_code, Some(3));
+        assert_eq!(parsed.stderr.as_deref(), Some("err"));
+        assert_eq!(parsed.stdout.as_deref(), Some("out"));
+    }
+
+    #[test]
     fn daemon_response_frame_round_trips_large_stdout() {
         let response = DaemonResponse {
             ok: true,
             message: None,
             stdout: Some("A".repeat(200_000)),
+            ..Default::default()
         };
         let mut bytes = Vec::new();
         write_daemon_response(&mut bytes, &response).unwrap();
@@ -2417,15 +3111,21 @@ struct DaemonRequest {
     remote_path: Option<String>,
     cache_ttl_ms: Option<u64>,
     pty: Option<bool>,
+    recursive: Option<bool>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 struct DaemonResponse {
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stdout: Option<String>,
+    // exec 专用：命令真实退出码与 stderr（成功路径也可能非零，如 exit 1 的命令）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exit_code: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stderr: Option<String>,
 }
 
 struct PoolEntry {
@@ -2481,7 +3181,7 @@ fn request_stop_daemon(config_path: &Path) -> AppResult<()> {
     Ok(())
 }
 
-fn request_daemon_execute(parsed: &ExecuteArgs, command: &str) -> AppResult<String> {
+fn request_daemon_execute(parsed: &ExecuteArgs, command: &str) -> AppResult<DaemonResponse> {
     let config_path = path_absolute(&parsed.global.config_path)?;
     let request = serde_json::json!({
         "operation": "execute",
@@ -2494,8 +3194,7 @@ fn request_daemon_execute(parsed: &ExecuteArgs, command: &str) -> AppResult<Stri
         "cacheTtlMs": cache_ttl(&parsed.global),
         "pty": parsed.pty,
     });
-    let response = request_daemon(&config_path, &request)?;
-    Ok(response.stdout.unwrap_or_default())
+    request_daemon(&config_path, &request)
 }
 
 fn request_daemon_transfer(parsed: &TransferArgs, operation: &str) -> AppResult<()> {
@@ -2507,6 +3206,8 @@ fn request_daemon_transfer(parsed: &TransferArgs, operation: &str) -> AppResult<
         "connectionName": parsed.connection_name,
         "localPath": parsed.local_path,
         "remotePath": parsed.remote_path,
+        "timeout": parsed.timeout_ms,
+        "recursive": parsed.recursive,
         "cacheTtlMs": cache_ttl(&parsed.global),
     });
     request_daemon(&config_path, &request)?;
@@ -2844,6 +3545,7 @@ fn run_daemon(argv: Vec<String>) -> AppResult<()> {
                             ok: false,
                             message: Some(error.to_string()),
                             stdout: None,
+                            ..Default::default()
                         },
                     };
                 let should_stop = response.stdout.as_deref() == Some("stop");
@@ -2892,6 +3594,7 @@ fn run_daemon(argv: Vec<String>) -> AppResult<()> {
                             ok: false,
                             message: Some(error.to_string()),
                             stdout: None,
+                            ..Default::default()
                         },
                     };
                 let should_stop = response.stdout.as_deref() == Some("stop");
@@ -2971,6 +3674,7 @@ fn handle_daemon_stream<S: Read + Write>(
             ok: true,
             message: None,
             stdout: None,
+            ..Default::default()
         });
     }
     if raw_value.get("operation").and_then(|item| item.as_str()) == Some("stop") {
@@ -2978,6 +3682,7 @@ fn handle_daemon_stream<S: Read + Write>(
             ok: true,
             message: None,
             stdout: Some("stop".to_string()),
+            ..Default::default()
         });
     }
     let request: DaemonRequest = serde_json::from_value(raw_value)?;
@@ -3042,7 +3747,7 @@ fn handle_daemon_stream<S: Read + Write>(
                 None => command,
             };
             let pty = resolve_pty(&connection, request.pty);
-            let stdout_result = state.run_with_timeout(
+            let execute_result = state.run_with_timeout(
                 request.timeout.unwrap_or(30000),
                 execute_remote_command_with_session_async(
                     &entry.session,
@@ -3051,8 +3756,9 @@ fn handle_daemon_stream<S: Read + Write>(
                     pty,
                 ),
             );
-            let stdout = match stdout_result {
-                Ok(stdout) => stdout,
+            // 仅当会话异常/连接失败（Err）时重连重试；命令非零退出（Ok 且 exit_code != 0）不重试。
+            let output = match execute_result {
+                Ok(output) => output,
                 Err(error) => {
                     let _ = state.run_with_timeout(request.timeout.unwrap_or(30000), async {
                         entry
@@ -3067,7 +3773,7 @@ fn handle_daemon_stream<S: Read + Write>(
                         request.timeout.unwrap_or(30000),
                         connect_russh(&state.configs, &connection),
                     )?;
-                    let stdout = state
+                    let output = state
                         .run_with_timeout(
                             request.timeout.unwrap_or(30000),
                             execute_remote_command_with_session_async(
@@ -3081,13 +3787,15 @@ fn handle_daemon_stream<S: Read + Write>(
                             AppError::new(format!("{}；已重连重试仍失败: {}", error, retry_error))
                         })?;
                     entry.session = session;
-                    stdout
+                    output
                 }
             };
             DaemonResponse {
                 ok: true,
                 message: None,
-                stdout: Some(stdout),
+                stdout: Some(output.stdout),
+                exit_code: Some(output.exit_code),
+                stderr: Some(output.stderr),
             }
         }
         "upload" => {
@@ -3098,18 +3806,39 @@ fn handle_daemon_stream<S: Read + Write>(
                 .remote_path
                 .ok_or_else(|| AppError::new("daemon upload 缺少 remotePath"))?;
             let local_path = path_absolute_from(Path::new(&local), &request.cwd)?;
-            if let Err(error) = state.runtime.block_on(upload_file_with_session_async(
-                &entry.session,
-                &connection,
-                &local_path,
-                &remote,
-            )) {
+            let session_ref = &entry.session;
+            let connection_ref = &connection;
+            let upload_future = Box::pin(async move {
+                if request.recursive.unwrap_or(false) {
+                    upload_dir_with_session_async(
+                        session_ref,
+                        connection_ref,
+                        &local_path,
+                        &remote,
+                    )
+                    .await
+                } else {
+                    upload_file_with_session_async(
+                        session_ref,
+                        connection_ref,
+                        &local_path,
+                        &remote,
+                    )
+                    .await
+                }
+            });
+            let upload_result = match request.timeout {
+                Some(timeout_ms) => state.run_with_timeout(timeout_ms, upload_future),
+                None => state.runtime.block_on(upload_future),
+            };
+            if let Err(error) = upload_result {
                 return Err(error);
             }
             DaemonResponse {
                 ok: true,
                 message: None,
                 stdout: None,
+                ..Default::default()
             }
         }
         "download" => {
@@ -3123,16 +3852,39 @@ fn handle_daemon_stream<S: Read + Write>(
             if let Some(parent) = local_path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            if let Err(error) = state.run_with_timeout(
-                request.timeout.unwrap_or(30000),
-                download_file_with_session_async(&entry.session, &connection, &remote, &local_path),
-            ) {
+            let session_ref = &entry.session;
+            let connection_ref = &connection;
+            let download_future = Box::pin(async move {
+                if request.recursive.unwrap_or(false) {
+                    download_dir_with_session_async(
+                        session_ref,
+                        connection_ref,
+                        &remote,
+                        &local_path,
+                    )
+                    .await
+                } else {
+                    download_file_with_session_async(
+                        session_ref,
+                        connection_ref,
+                        &remote,
+                        &local_path,
+                    )
+                    .await
+                }
+            });
+            let download_result = match request.timeout {
+                Some(timeout_ms) => state.run_with_timeout(timeout_ms, download_future),
+                None => state.runtime.block_on(download_future),
+            };
+            if let Err(error) = download_result {
                 return Err(error);
             }
             DaemonResponse {
                 ok: true,
                 message: None,
                 stdout: None,
+                ..Default::default()
             }
         }
         _ => {

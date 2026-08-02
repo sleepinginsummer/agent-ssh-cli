@@ -12,7 +12,7 @@
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white" alt="Node.js >=18"></a>
   <a href="https://www.npmjs.com/"><img src="https://img.shields.io/badge/npm-%3E%3D8-CB3837?logo=npm&logoColor=white" alt="npm >=8"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli"><img src="https://img.shields.io/badge/sys-win%2Fmac%2Flinux-0078D6" alt="sys win/mac/linux"></a>
-  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.3.9-blue" alt="release v0.3.9"></a>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.4.0-blue" alt="release v0.4.0"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
 </p>
 
@@ -58,6 +58,17 @@
 - 本机网络可访问目标 SSH 服务器
 - 如使用私钥认证，私钥文件需对当前用户可读
 - 预编译平台包支持 macOS arm64/x64、Linux x64/arm64、Windows x64
+
+### 常用参数
+
+- `exec --timeout <ms>`: 单次命令超时，默认 `30000`
+- `upload` / `download --timeout <ms>`: 传输总超时，默认不限制（大文件允许长时间运行）
+- `upload` / `download --recursive`: 递归传输目录，保持相对路径；符号链接不跟随，指向目录的链接跳过、指向文件的链接上传其内容
+- 下载支持断点续传：中断后本地保留 `.part` 文件，下次自动从断点继续
+- `exec` / `upload` / `download --json`: 输出结构化 JSON（`exitCode`/`stdout`/`stderr`），`exitCode` 为远端命令真实退出码，便于脚本和 AI 解析
+- `agentsshcli init-config`: 生成默认配置文件到 `~/.agent-ssh-cli/config.json`
+- `agentsshcli stop-daemon`: 停止当前配置对应的 SSH 缓存进程
+- 远端会话异常终止时提示 `[remote] 会话异常终止（无退出状态）`，不会静默返回成功
 
 ### 安装步骤
 

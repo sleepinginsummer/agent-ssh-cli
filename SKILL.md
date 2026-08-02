@@ -102,6 +102,37 @@ mkdir -p ~/.agent-ssh-cli
 }
 ```
 
+配置文件完整字段（每项是 `name` 唯一的一台服务器）：
+
+- `name`: 连接名，必须唯一
+- `host` / `port` / `username`: SSH 主机、端口（默认 22）、用户名
+- `password` / `passwordRef` / `privateKey`: 认证方式，三者只能保留一种；`passphrase` 仅配合 `privateKey` 使用
+- `jumpHost`: 跳板机连接名，填写配置文件中另一台机器的 `name`；连接时先建立到跳板机的 SSH，再通过直连通道到达目标机
+- `socksProxy`: SOCKS5 代理地址，例如 `socks5://127.0.0.1:1080`；也可省略协议写成 `127.0.0.1:1080`
+- `pty`: 是否默认分配伪终端，`exec --pty` / `--no-pty` 可临时覆盖
+- `commandWhitelist` / `commandBlacklist`: 命令白/黑名单正则数组
+
+跳板机示例：
+
+```json
+[
+  {
+    "name": "目标机",
+    "host": "10.0.0.5",
+    "username": "root",
+    "passwordRef": "agentsshcli:目标机",
+    "jumpHost": "跳板机"
+  },
+  {
+    "name": "跳板机",
+    "host": "203.0.113.10",
+    "port": 22,
+    "username": "ubuntu",
+    "privateKey": "/path/to/jump_key"
+  }
+]
+```
+
 指定其它配置文件：
 
 ```bash
@@ -132,8 +163,17 @@ npm test
 
 - `--no-cache`: 跳过 Rust daemon 连接缓存，本次命令独立建立并关闭连接，即直连模式
 - `--cache-ttl <ms>`: 设置 Rust daemon 连接缓存空闲毫秒数，默认 `180000`
+- `--json`: `exec`、`upload`、`download` 输出结构化 JSON（字段 `exitCode`/`stdout`/`stderr`），便于脚本和 AI 解析
 
 缓存参数属于子命令级参数，必须放在 `exec`、`upload`、`download` 后、连接名或 `--connection` 前。放在命令末尾会被当作未知参数。
+
+## init-config
+
+生成默认配置文件到 `~/.agent-ssh-cli/config.json`（已存在时不覆盖）：
+
+```bash
+agentsshcli init-config
+```
 
 ## list
 
@@ -196,11 +236,12 @@ agentsshcli exec --no-cache --connection "<connectionName>" --command "<command>
 - `<command>`: 远端命令
 - `--connection <name>`, `-c <name>`: 连接名
 - `--command <command>`: 远端命令
-- `--command-file <path>`: 从本地 UTF-8 文件读取远端命令，适合执行多行脚本，文件必须使用 LF 换行，不能使用 Windows CRLF 换行；不能和 `--command` 或位置参数 `<command>` 同时使用
+- `--command-file <path>`: 从本地 UTF-8 文件读取内容作为远端命令执行（不是先上传再执行），适合执行多行脚本；文件必须使用 LF 换行，不能使用 Windows CRLF 换行；不能和 `--command` 或位置参数 `<command>` 同时使用
 - `--directory <dir>`, `-d <dir>`: 远端工作目录
 - `--timeout <ms>`, `-t <ms>`: 超时毫秒值，默认 `30000`
 - `--pty`: 本次命令分配伪终端，优先级高于配置文件
 - `--no-pty`: 本次命令不分配伪终端，优先级高于配置文件
+- `--json`: 输出结构化 JSON（`exitCode`/`stdout`/`stderr`）
 - `--no-cache`: 不复用连接，必须放在连接名或 `--connection` 前
 - `--cache-ttl <ms>`: 连接缓存空闲毫秒数，必须放在连接名或 `--connection` 前
 
@@ -228,6 +269,14 @@ agentsshcli exec --connection "<connectionName>" --command-file "$env:TEMP\remot
 - 成功但无 stdout 时不输出内容
 - 退出码为 `0`
 - 远端命令非零退出、超时、命中黑名单、未命中白名单或连接失败时，stderr 输出错误信息，退出码为 `1`
+- `--json` 模式下输出 JSON，`exitCode` 为远端命令**真实退出码**（非零表示命令失败），`stdout`/`stderr` 如实返回远端输出；命令失败时进程退出码仍为 `1`
+
+注意事项：
+
+- 命令里使用 `pkill -f` / `pgrep -f` 时，匹配串会命中**执行该命令的远端 shell 自身**（命令行包含该字符串），导致 shell 被杀、命令中断且无输出。需要排除自身时用正则技巧，如 `pkill -f 'name[.]log'`。
+- 远端会话被异常终止（shell 被杀等）时，会报 `[remote] 会话异常终止（无退出状态）`，不会静默返回成功。
+- 命令末尾启动后台进程且不重定向 stdout 时，远端不会关闭通道，命令会等到总超时；如需后台运行请把 stdout/stderr 重定向到文件（如 `> /tmp/x.log 2>&1 < /dev/null &`）。
+- **命令请用引号包裹**（如 `--command "<command>"` 或位置参数 `"<command>"`）：命令内容里独立的 `--json`、`--timeout` 等 token 会被当作 CLI 参数解析，未加引号时可能被误吞或报错。
 
 ## upload
 
@@ -255,6 +304,9 @@ agentsshcli upload --no-cache --connection "<connectionName>" --local "./tmp/upl
 - `--connection <name>`, `-c <name>`: 连接名
 - `--local <path>`, `-l <path>`: 本地文件路径
 - `--remote <path>`, `-r <path>`: 远端目标文件路径
+- `--timeout <ms>`: 总超时毫秒值，默认不限制（大文件允许长时间运行），与 `exec` 的默认 30s 不同
+- `--recursive`: 递归上传目录，保持相对路径；符号链接不跟随——指向目录的链接跳过（防循环），指向文件的链接上传其内容
+- `--json`: 输出结构化 JSON
 - `--no-cache`: 不复用连接，必须放在连接名或 `--connection` 前
 - `--cache-ttl <ms>`: 连接缓存空闲毫秒数，必须放在连接名或 `--connection` 前
 
@@ -270,6 +322,7 @@ agentsshcli upload --no-cache --connection "<connectionName>" --local "./tmp/upl
 - 成功时 stdout 输出 `File uploaded successfully`
 - 退出码为 `0`
 - 本地文件不存在、远端写入失败或连接失败时，stderr 输出错误信息，退出码为 `1`
+- `--json` 模式下成功时 stdout 为 `{"exitCode":0,"stdout":"File uploaded successfully","stderr":""}`，失败时 `exitCode` 为 `1`
 
 ## download
 
@@ -289,25 +342,39 @@ agentsshcli download --connection "<connectionName>" --remote "/usr/local/test/u
 agentsshcli download --no-cache --connection "<connectionName>" --remote "/usr/local/test/upload.txt" --local "./tmp/download.txt"
 ```
 
-参数：
-
 - `<connectionName>`: 连接名
 - `<remotePath>`: 远端文件路径
 - `<localPath>`: 本地目标文件路径
 - `--connection <name>`, `-c <name>`: 连接名
 - `--remote <path>`, `-r <path>`: 远端文件路径
 - `--local <path>`, `-l <path>`: 本地目标文件路径
+- `--timeout <ms>`: 总超时毫秒值，默认不限制（大文件允许长时间运行），与 `exec` 的默认 30s 不同
+- `--recursive`: 递归下载目录，保持相对路径；远端符号链接跳过
+- `--json`: 输出结构化 JSON
 - `--no-cache`: 不复用连接，必须放在连接名或 `--connection` 前
 - `--cache-ttl <ms>`: 连接缓存空闲毫秒数，必须放在连接名或 `--connection` 前
+
+下载稳定性：
+
+- 下载会先写入本地 `<localPath>.part` 临时文件，并写入 `<localPath>.part.meta` 续传元数据；完成后校验大小再 rename 为正式目标文件。
+- 下载中断后，下次下载同一个远端文件到同一个本地路径会从已有 `.part` 大小继续；远端文件特征变化时自动删除旧 `.part` 重新下载。
 
 返回值：
 
 - 成功时 stdout 输出 `File downloaded successfully`
 - 退出码为 `0`
 - 本地写入失败、远端读取失败或连接失败时，stderr 输出错误信息，退出码为 `1`
+- `--json` 模式下成功时 stdout 为 `{"exitCode":0,"stdout":"File downloaded successfully","stderr":""}`，失败时 `exitCode` 为 `1`
+
+## stop-daemon
+
+停止当前配置文件对应的 SSH 缓存进程（连接池）。它是连接池维护命令，不是精确取消单个上传任务，会影响同一 daemon 内其它任务：
+
+```bash
+agentsshcli stop-daemon [--config <path>]
+```
 
 ## help/version
-
 ```bash
 agentsshcli --help
 agentsshcli help list
