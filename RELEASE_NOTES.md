@@ -1,5 +1,27 @@
 # Release Notes
 
+## v0.5.0
+
+新增安全的 sudo/su 提权执行通道：
+
+- `exec` 新增互斥参数 `--sudo` / `--su`，支持缓存 daemon 与 `--no-cache` 直连模式。
+- 连接配置新增 `privilegeEnabled` 安全开关，默认关闭；关闭时在凭据迁移和 SSH 连接前拒绝提权执行。
+- 新增 sudo/su 独立用户与凭据字段，明文首次使用时迁移到 `secrets.json`；SSH、sudo、su 使用隔离的密文 key。
+- sudo 独立密码缺失时可复用 SSH 密码；su 始终要求目标用户的独立密码。
+- 密码仅通过 SSH channel stdin 发送，不进入本地/远端 argv，不写远端临时文件。
+- 完整原始命令在提权后的 shell 中执行，支持管道、重定向和 `&&`，并统一进行 shell 参数转义与 Unix 用户名校验。
+- 支持 sudo requiretty 常见错误探测、`su -P/--pty` 能力探测，以及具备 `-c/-e` 能力时的 `script` 安全 fallback。
+- 提权逻辑拆分到 `native/src/privilege.rs`，channel 输出收集及 daemon execute 处理独立封装。
+- `build-native-packages.yml` 改为仅手动触发，tag 发布只运行 `publish.yml`，避免重复五平台构建。
+- README、SKILL.md 和示例配置同步更新。
+
+验证：
+
+- `npm test` 通过，共 40 项测试。
+- `npm run build:native` 通过。
+- 默认关闭及 `--json` 错误路径冒烟通过，拒绝执行时配置文件保持不变。
+- sudo/su 远端实机兼容性仍需在具体目标环境验证。
+
 ## v0.4.1
 
 修复 0.4.0 的两个参数解析回归：

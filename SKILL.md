@@ -110,6 +110,9 @@ mkdir -p ~/.agent-ssh-cli
 - `jumpHost`: 跳板机连接名，填写配置文件中另一台机器的 `name`；连接时先建立到跳板机的 SSH，再通过直连通道到达目标机
 - `socksProxy`: SOCKS5 代理地址，例如 `socks5://127.0.0.1:1080`；也可省略协议写成 `127.0.0.1:1080`
 - `pty`: 是否默认分配伪终端，`exec --pty` / `--no-pty` 可临时覆盖
+- `privilegeEnabled`: 是否允许 `exec --sudo/--su`，默认 `false`
+- `sudoUser`: sudo 目标用户，默认 `root`；`sudoPassword`/`sudoPasswordRef` 保存当前 SSH 用户的 sudo 密码，缺失时可复用 SSH 密码
+- `suUser`: su 目标用户，默认 `root`；`suPassword`/`suPasswordRef` 必须保存目标用户密码
 - `commandWhitelist` / `commandBlacklist`: 命令白/黑名单正则数组
 
 跳板机示例：
@@ -220,6 +223,8 @@ agentsshcli exec --no-cache "<connectionName>" "<command>"
 agentsshcli exec --cache-ttl 60000 "<connectionName>" "<command>"
 agentsshcli exec --pty "<connectionName>" "<command>"
 agentsshcli exec --no-pty "<connectionName>" "<command>"
+agentsshcli exec --sudo "<connectionName>" "systemctl status app"
+agentsshcli exec --su "<connectionName>" "id && pwd"
 ```
 
 命名参数形式：
@@ -241,9 +246,13 @@ agentsshcli exec --no-cache --connection "<connectionName>" --command "<command>
 - `--timeout <ms>`, `-t <ms>`: 超时毫秒值，默认 `30000`
 - `--pty`: 本次命令分配伪终端，优先级高于配置文件
 - `--no-pty`: 本次命令不分配伪终端，优先级高于配置文件
+- `--sudo`: 使用 sudo 提权执行，要求连接配置 `privilegeEnabled: true`
+- `--su`: 使用 su 切换用户执行，要求连接配置 `privilegeEnabled: true`；与 `--sudo` 互斥
 - `--json`: 输出结构化 JSON（`exitCode`/`stdout`/`stderr`）
 - `--no-cache`: 不复用连接，必须放在连接名或 `--connection` 前
 - `--cache-ttl <ms>`: 连接缓存空闲毫秒数，必须放在连接名或 `--connection` 前
+
+提权模式只支持非交互命令：CLI 通过 SSH channel stdin 发送密码后关闭 stdin，目标命令不能继续读取输入。sudo 独立凭据缺失时可复用 SSH 密码；私钥登录必须配置 `sudoPassword`/`sudoPasswordRef`。su 始终要求独立的目标用户密码。
 
 使用 `--command-file` 时，必须确保脚本文件是 LF 换行。CRLF 文件会把 `\r` 传到远端 bash，可能导致 `$'xxx\r': command not found`。
 

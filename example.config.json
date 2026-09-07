@@ -47,5 +47,20 @@
       "(^|[;&|()\\s])shutdown(\\s|$)",
       "(^|[;&|()\\s])reboot(\\s|$)"
     ]
+  },
+  {
+    "name": "提权服务器",
+    "host": "192.0.2.20",
+    "port": 22,
+    "username": "operator",
+    "password": "",
+    "passwordRef": "agentsshcli:提权服务器",
+    "privilegeEnabled": false,
+    "sudoUser": "root",
+    "sudoPassword": "",
+    "sudoPasswordRef": "agentsshcli:提权服务器:sudo",
+    "suUser": "oracle",
+    "suPassword": "",
+    "suPasswordRef": "agentsshcli:提权服务器:su"
   }
 ]

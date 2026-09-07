@@ -12,7 +12,7 @@
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white" alt="Node.js >=18"></a>
   <a href="https://www.npmjs.com/"><img src="https://img.shields.io/badge/npm-%3E%3D8-CB3837?logo=npm&logoColor=white" alt="npm >=8"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli"><img src="https://img.shields.io/badge/sys-win%2Fmac%2Flinux-0078D6" alt="sys win/mac/linux"></a>
-  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.4.1-blue" alt="release v0.4.1"></a>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.5.0-blue" alt="release v0.5.0"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
 </p>
 
@@ -110,6 +110,9 @@ AGENT_SSH_CONFIG=/path/to/config.json
 - `socksProxy`: SOCKS5 代理地址，例如 `socks5://127.0.0.1:1080`；也可省略协议写成 `127.0.0.1:1080`
 - `jumpHost`: 跳板机连接名，填写配置文件中另一台机器的 `name`
 - `pty`: 是否分配伪终端，默认 `false`，也可通过 `exec --pty` 临时开启
+- `privilegeEnabled`: 是否允许该连接使用 `exec --sudo/--su`，默认 `false`
+- `sudoUser`: sudo 目标用户，默认 `root`；`sudoPassword`/`sudoPasswordRef` 保存当前 SSH 用户的 sudo 密码，未配置时可复用 SSH 密码
+- `suUser`: su 目标用户，默认 `root`；`suPassword`/`suPasswordRef` 必须独立配置目标用户密码
 - `allowedLocalPaths`: 兼容旧配置字段，当前不限制本地路径
 - `commandWhitelist`: 命令白名单正则数组
 - `commandBlacklist`: 命令黑名单正则数组
@@ -119,6 +122,8 @@ AGENT_SSH_CONFIG=/path/to/config.json
 完整示例见 [example.config.json](example.config.json)。`~/.agent-ssh-cli/config.json` 保存真实连接信息。
 
 为防止配置文件中的密码泄露，密码认证会在第一次使用该服务器时被动加密保存：首次写入明文 `password` 后，执行 `exec`、`upload` 或 `download` 连接该服务器时，CLI 会把密码加密保存到配置目录下的 `secrets.json`，生成本地 `secret.key`，并把配置中的 `password` 置空、写入 `passwordRef`。后续运行通过 `passwordRef` 解密认证；如需修改密码，把空的 `password` 重新填成新密码，下次连接会自动覆盖旧密文。
+
+sudo/su 明文凭据也采用相同的被动迁移规则，但仅在首次使用对应 flag 时迁移，密文 key 分别为 `agentsshcli:<name>:sudo` 和 `agentsshcli:<name>:su`。提权必须显式设置 `privilegeEnabled: true`；默认关闭时，即使配置了凭据也会拒绝 `--sudo/--su`。
 
 参考配置
 
@@ -172,6 +177,30 @@ AGENT_SSH_CONFIG=/path/to/config.json
   }
 ]
 ```
+
+提权连接示例（需要使用时将开关设为 `true`）：
+
+```json
+{
+  "name": "业务服务器",
+  "host": "192.0.2.20",
+  "username": "operator",
+  "privateKey": "/path/to/id_rsa",
+  "privilegeEnabled": true,
+  "sudoUser": "root",
+  "sudoPassword": "当前 SSH 用户的 sudo 密码",
+  "suUser": "oracle",
+  "suPassword": "oracle 用户密码"
+}
+```
+
+```bash
+agentsshcli exec --sudo 业务服务器 "systemctl status app"
+agentsshcli exec --su 业务服务器 "id && pwd"
+```
+
+`--sudo` 和 `--su` 互斥。两种模式都只支持非交互命令，密码发送后会关闭远端 stdin；目标命令不能继续读取 stdin。sudo 会优先使用独立 sudo 凭据，缺失时复用 SSH 密码；私钥登录无法复用密码，必须配置独立 sudo 凭据。
+
 测试命令
 
 ```bash

@@ -1,9 +1,16 @@
+mod privilege;
+
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 #[cfg(windows)]
 use interprocess::local_socket::{
     prelude::*, GenericNamespaced, ListenerOptions, Stream as LocalSocketStream,
+};
+use privilege::{
+    credential_fields, su_pty_command, su_script_command, sudo_command, sudo_requires_tty,
+    validate_unix_username, PrivilegeMode, SCRIPT_FALLBACK_PROBE, SUDO_PROMPT_MARKER,
+    SUDO_REQUIRE_TTY_PROBE, SU_PTY_PROBE, SU_READY_MARKER,
 };
 use rand_core::{OsRng, RngCore};
 use regex::Regex;
@@ -25,8 +32,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use url::Url;
@@ -49,8 +56,8 @@ const TRANSFER_MAX_RETRIES: usize = 3;
 const HELP_AGENTSSHCLI: &str = r#"
 用法:
   agentsshcli list [--config <path>] [--json]
-  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] [--pty|--no-pty] <connectionName> <command>
-  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] [--pty|--no-pty] --connection <name> (--command <command>|--command-file <path>) [--directory <dir>] [--timeout <ms>]
+  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] [--pty|--no-pty] [--sudo|--su] <connectionName> <command>
+  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] [--pty|--no-pty] [--sudo|--su] --connection <name> (--command <command>|--command-file <path>) [--directory <dir>] [--timeout <ms>]
   agentsshcli upload [--config <path>] [--no-cache] [--cache-ttl <ms>] <connectionName> <localPath> <remotePath>
   agentsshcli upload [--config <path>] [--no-cache] [--cache-ttl <ms>] --connection <name> --local <path> --remote <path>
   agentsshcli download [--config <path>] [--no-cache] [--cache-ttl <ms>] <connectionName> <remotePath> <localPath>
@@ -77,13 +84,14 @@ const HELP_LIST: &str = r#"
 
 const HELP_EXEC: &str = r#"
 用法:
-  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] [--pty|--no-pty] [--json] <connectionName> <command>
-  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] [--pty|--no-pty] [--json] --connection <name> (--command <command>|--command-file <path>) [--directory <dir>] [--timeout <ms>]
+  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] [--pty|--no-pty] [--sudo|--su] [--json] <connectionName> <command>
+  agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] [--pty|--no-pty] [--sudo|--su] [--json] --connection <name> (--command <command>|--command-file <path>) [--directory <dir>] [--timeout <ms>]
   agentsshcli help exec
   agentsshcli --version
 
 说明:
   在远端执行命令。默认不分配伪终端，可通过 --pty 临时开启。
+  --sudo/--su: 使用配置中的 sudo 或 su 凭据提权执行，两者互斥且要求 privilegeEnabled=true。
   --json: 输出结构化 JSON，字段为 exitCode/stdout/stderr。
 "#;
 
@@ -174,6 +182,13 @@ struct RawConnection {
     socks_proxy: Option<String>,
     jump_host: Option<String>,
     pty: Option<bool>,
+    privilege_enabled: Option<bool>,
+    sudo_user: Option<String>,
+    sudo_password: Option<String>,
+    sudo_password_ref: Option<String>,
+    su_user: Option<String>,
+    su_password: Option<String>,
+    su_password_ref: Option<String>,
     allowed_local_paths: Option<Vec<String>>,
     command_whitelist: Option<Vec<String>>,
     command_blacklist: Option<Vec<String>>,
@@ -197,6 +212,13 @@ struct Connection {
     socks_proxy: Option<String>,
     jump_host: Option<String>,
     pty: Option<bool>,
+    privilege_enabled: bool,
+    sudo_user: String,
+    sudo_password: Option<String>,
+    sudo_password_ref: Option<String>,
+    su_user: String,
+    su_password: Option<String>,
+    su_password_ref: Option<String>,
     command_whitelist: Vec<PatternRule>,
     command_blacklist: Vec<PatternRule>,
 }
@@ -220,8 +242,10 @@ struct ExecuteArgs {
     directory: Option<String>,
     timeout_ms: u64,
     pty: Option<bool>,
+    privilege: Option<PrivilegeMode>,
     json_output: bool,
 }
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UploadResumeMeta {
@@ -429,6 +453,23 @@ fn ensure_regex_array(
         .collect()
 }
 
+fn normalize_privilege_user(
+    value: Option<String>,
+    default: &str,
+    field_name: &str,
+    index: usize,
+) -> AppResult<String> {
+    let user = value.unwrap_or_else(|| default.to_string());
+    if !validate_unix_username(&user) {
+        return Err(AppError::new(format!(
+            "ssh-config.json 第 {} 项的 {} 不是合法的 Unix 用户名",
+            index + 1,
+            field_name
+        )));
+    }
+    Ok(user)
+}
+
 fn normalize_entry(entry: RawConnection, index: usize) -> AppResult<Connection> {
     let name = entry
         .name
@@ -532,6 +573,20 @@ fn normalize_entry(entry: RawConnection, index: usize) -> AppResult<Connection> 
             index + 1
         )));
     }
+    for (value, field_name) in [
+        (&entry.sudo_password_ref, "sudoPasswordRef"),
+        (&entry.su_password_ref, "suPasswordRef"),
+    ] {
+        if value.as_ref().is_some_and(|item| item.trim().is_empty()) {
+            return Err(AppError::new(format!(
+                "ssh-config.json 第 {} 项的 {} 必须是非空字符串",
+                index + 1,
+                field_name
+            )));
+        }
+    }
+    let sudo_user = normalize_privilege_user(entry.sudo_user, "root", "sudoUser", index)?;
+    let su_user = normalize_privilege_user(entry.su_user, "root", "suUser", index)?;
     let _ = ensure_string_array(entry.allowed_local_paths, "allowedLocalPaths", index)?;
     Ok(Connection {
         name,
@@ -545,6 +600,13 @@ fn normalize_entry(entry: RawConnection, index: usize) -> AppResult<Connection> 
         socks_proxy: entry.socks_proxy,
         jump_host: entry.jump_host,
         pty: entry.pty,
+        privilege_enabled: entry.privilege_enabled.unwrap_or(false),
+        sudo_user,
+        sudo_password: entry.sudo_password.filter(|value| !value.trim().is_empty()),
+        sudo_password_ref: entry.sudo_password_ref,
+        su_user,
+        su_password: entry.su_password.filter(|value| !value.trim().is_empty()),
+        su_password_ref: entry.su_password_ref,
         command_whitelist: ensure_regex_array(entry.command_whitelist, "commandWhitelist", index)?,
         command_blacklist: ensure_regex_array(entry.command_blacklist, "commandBlacklist", index)?,
     })
@@ -584,6 +646,30 @@ fn load_config_for_connection(
     resolve_jump_password_refs(config_path, &mut configs, connection_name)?;
     validate_jump_hosts(&configs)?;
     Ok(configs)
+}
+
+fn load_config_for_execute(
+    config_path: &Path,
+    connection_name: &str,
+    privilege: Option<PrivilegeMode>,
+) -> AppResult<Vec<Connection>> {
+    let mut configs = load_config_for_connection(config_path, connection_name)?;
+    if let Some(mode) = privilege {
+        resolve_privilege_credentials(config_path, &mut configs, connection_name, mode)?;
+    }
+    Ok(configs)
+}
+
+fn ensure_privilege_enabled(config_path: &Path, connection_name: &str) -> AppResult<()> {
+    let configs = load_config(config_path)?;
+    let connection = find_connection(&configs, connection_name)?;
+    if !connection.privilege_enabled {
+        return Err(AppError::new(format!(
+            "连接 {} 未开启 privilegeEnabled，拒绝提权执行",
+            connection_name
+        )));
+    }
+    Ok(())
 }
 
 fn validate_jump_hosts(configs: &[Connection]) -> AppResult<()> {
@@ -840,13 +926,84 @@ fn resolve_jump_password_refs(
     Ok(())
 }
 
+fn resolve_privilege_credentials(
+    config_path: &Path,
+    configs: &mut [Connection],
+    connection_name: &str,
+    mode: PrivilegeMode,
+) -> AppResult<()> {
+    let connection = configs
+        .iter_mut()
+        .find(|item| item.name == connection_name)
+        .ok_or_else(|| AppError::new(format!("未找到连接配置: {}", connection_name)))?;
+    if !connection.privilege_enabled {
+        return Err(AppError::new(format!(
+            "连接 {} 未开启 privilegeEnabled，拒绝提权执行",
+            connection_name
+        )));
+    }
+    match mode {
+        PrivilegeMode::Sudo => {
+            if connection.sudo_password.is_none() {
+                connection.sudo_password = match connection.sudo_password_ref.as_deref() {
+                    Some(password_ref) => Some(decrypt_password(config_path, password_ref)?),
+                    None => connection.password.clone(),
+                };
+            }
+            if connection.sudo_password.is_none() {
+                return Err(AppError::new(format!(
+                    "连接 {} 缺少 sudoPassword/sudoPasswordRef，且 SSH 认证密码不可复用",
+                    connection_name
+                )));
+            }
+        }
+        PrivilegeMode::Su => {
+            if connection.su_password.is_none() {
+                if let Some(password_ref) = connection.su_password_ref.as_deref() {
+                    connection.su_password = Some(decrypt_password(config_path, password_ref)?);
+                }
+            }
+            if connection.su_password.is_none() {
+                return Err(AppError::new(format!(
+                    "连接 {} 缺少 suPassword 或 suPasswordRef",
+                    connection_name
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn prepare_privilege_config(
+    config_path: &Path,
+    connection_name: &str,
+    mode: PrivilegeMode,
+) -> AppResult<()> {
+    let fields = credential_fields(mode);
+    let default_ref = format!(
+        "{}{}{}",
+        PASSWORD_REF_PREFIX, connection_name, fields.reference_suffix
+    );
+    let _ = migrate_plain_credential_for_connection(
+        config_path,
+        connection_name,
+        fields.password,
+        fields.password_ref,
+        &default_ref,
+    )?;
+    Ok(())
+}
+
 fn password_ref_for(connection_name: &str) -> String {
     format!("{}{}", PASSWORD_REF_PREFIX, connection_name)
 }
 
-fn migrate_plain_password_for_connection(
+fn migrate_plain_credential_for_connection(
     config_path: &Path,
     connection_name: &str,
+    password_field: &str,
+    password_ref_field: &str,
+    default_password_ref: &str,
 ) -> AppResult<bool> {
     let _lock = MigrationLock::acquire(config_path)?;
     let raw = fs::read_to_string(config_path)?;
@@ -864,7 +1021,7 @@ fn migrate_plain_password_for_connection(
         if name != connection_name {
             continue;
         }
-        let Some(password) = object.get("password").and_then(|item| item.as_str()) else {
+        let Some(password) = object.get(password_field).and_then(|item| item.as_str()) else {
             return Ok(false);
         };
         if password.trim().is_empty() {
@@ -872,18 +1029,18 @@ fn migrate_plain_password_for_connection(
         }
         let password = password.to_string();
         let password_ref = object
-            .get("passwordRef")
+            .get(password_ref_field)
             .and_then(|item| item.as_str())
             .filter(|item| !item.trim().is_empty())
             .map(ToString::to_string)
-            .unwrap_or_else(|| password_ref_for(connection_name));
+            .unwrap_or_else(|| default_password_ref.to_string());
         encrypt_password(config_path, &password_ref, &password)?;
         object.insert(
-            "password".to_string(),
+            password_field.to_string(),
             serde_json::Value::String(String::new()),
         );
         object.insert(
-            "passwordRef".to_string(),
+            password_ref_field.to_string(),
             serde_json::Value::String(password_ref),
         );
         migrated = true;
@@ -893,6 +1050,19 @@ fn migrate_plain_password_for_connection(
         write_config_values(config_path, &values)?;
     }
     Ok(migrated)
+}
+
+fn migrate_plain_password_for_connection(
+    config_path: &Path,
+    connection_name: &str,
+) -> AppResult<bool> {
+    migrate_plain_credential_for_connection(
+        config_path,
+        connection_name,
+        "password",
+        "passwordRef",
+        &password_ref_for(connection_name),
+    )
 }
 
 fn write_config_values(config_path: &Path, values: &[serde_json::Value]) -> AppResult<()> {
@@ -1120,7 +1290,6 @@ fn take_bool_flag_pair(
     Ok(None)
 }
 
-
 fn ensure_no_mixed(
     named: &Option<String>,
     positional: &Option<String>,
@@ -1163,6 +1332,7 @@ fn parse_execute_args(argv: Vec<String>) -> AppResult<ExecuteArgs> {
             directory: None,
             timeout_ms: 30000,
             pty: None,
+            privilege: None,
             json_output: false,
         });
     }
@@ -1176,6 +1346,14 @@ fn parse_execute_args(argv: Vec<String>) -> AppResult<ExecuteArgs> {
     let timeout_value = take_option(&mut args, &["--timeout", "-t"])?;
     let json_output = take_bool_flag(&mut args, "--json")?;
     let pty = take_bool_flag_pair(&mut args, "--pty", "--no-pty")?;
+    let sudo = take_bool_flag(&mut args, "--sudo")?;
+    let su = take_bool_flag(&mut args, "--su")?;
+    let privilege = match (sudo, su) {
+        (true, true) => return Err(AppError::new("--sudo 和 --su 只能选择一个")),
+        (true, false) => Some(PrivilegeMode::Sudo),
+        (false, true) => Some(PrivilegeMode::Su),
+        (false, false) => None,
+    };
     let connection_positional = take_positional(&mut args, "connectionName")?;
     let command_positional = take_positional(&mut args, "command")?;
     ensure_no_mixed(&connection_option, &connection_positional, "connectionName")?;
@@ -1209,6 +1387,7 @@ fn parse_execute_args(argv: Vec<String>) -> AppResult<ExecuteArgs> {
         directory,
         timeout_ms,
         pty,
+        privilege,
         json_output,
     })
 }
@@ -1361,8 +1540,18 @@ fn run_exec(argv: Vec<String>) -> AppResult<()> {
         return print_version();
     }
     JSON_OUTPUT_MODE.store(parsed.json_output, Ordering::Relaxed);
+    if parsed.privilege.is_some() {
+        ensure_privilege_enabled(&parsed.global.config_path, &parsed.connection_name)?;
+    }
     prepare_connection_config(&parsed.global.config_path, &parsed.connection_name)?;
-    let configs = load_config_for_connection(&parsed.global.config_path, &parsed.connection_name)?;
+    if let Some(mode) = parsed.privilege {
+        prepare_privilege_config(&parsed.global.config_path, &parsed.connection_name, mode)?;
+    }
+    let configs = load_config_for_execute(
+        &parsed.global.config_path,
+        &parsed.connection_name,
+        parsed.privilege,
+    )?;
     let connection = find_connection(&configs, &parsed.connection_name)?;
     let command = resolve_execute_command(&configs, &parsed)?;
     validate_command(connection, &command)?;
@@ -1377,6 +1566,7 @@ fn run_exec(argv: Vec<String>) -> AppResult<()> {
             &remote_command,
             parsed.timeout_ms,
             resolve_pty(connection, parsed.pty),
+            parsed.privilege,
         )?
     } else {
         let response = request_daemon_execute(&parsed, &command)?;
@@ -1838,36 +2028,85 @@ struct ExecOutput {
     stderr: String,
 }
 
-async fn execute_remote_command_with_session_async(
-    session: &client::Handle<RusshClient>,
-    connection: &Connection,
-    remote_command: &str,
-    pty: bool,
-) -> AppResult<ExecOutput> {
-    let mut channel = session.channel_open_session().await.map_err(|error| {
-        AppError::new(format!("连接 {} 打开会话失败: {}", connection.name, error))
-    })?;
-    if pty {
-        channel
-            .request_pty(true, "xterm", 80, 24, 0, 0, &[])
-            .await
-            .map_err(|error| {
-                AppError::new(format!(
-                    "连接 {} 分配伪终端失败: {}",
-                    connection.name, error
-                ))
-            })?;
-    }
-    channel.exec(true, remote_command).await.map_err(|error| {
-        AppError::new(format!("连接 {} 执行命令失败: {}", connection.name, error))
-    })?;
+#[derive(Debug, Clone)]
+struct CommandInput {
+    data: Vec<u8>,
+    wait_for: Option<Vec<u8>>,
+}
 
+fn password_input(password: &str, wait_for: Option<&str>) -> AppResult<CommandInput> {
+    if password
+        .bytes()
+        .any(|byte| matches!(byte, b'\n' | b'\r' | 0))
+    {
+        return Err(AppError::new("sudo/su 密码不能包含换行符或 NUL"));
+    }
+    Ok(CommandInput {
+        data: format!("{}\n", password).into_bytes(),
+        wait_for: wait_for.map(|marker| marker.as_bytes().to_vec()),
+    })
+}
+
+fn strip_first_marker(buffer: &mut Vec<u8>, marker: &[u8]) -> bool {
+    let Some(index) = buffer
+        .windows(marker.len())
+        .position(|window| window == marker)
+    else {
+        return false;
+    };
+    buffer.drain(index..index + marker.len());
+    true
+}
+
+fn consume_input_marker(input: &CommandInput, stdout: &mut Vec<u8>, stderr: &mut Vec<u8>) -> bool {
+    let Some(marker) = input.wait_for.as_deref() else {
+        return true;
+    };
+    strip_first_marker(stdout, marker) || strip_first_marker(stderr, marker)
+}
+
+async fn send_command_input(
+    channel: &russh::Channel<client::Msg>,
+    connection: &Connection,
+    data: &[u8],
+) -> AppResult<()> {
+    channel.data(data).await.map_err(|error| {
+        AppError::new(format!(
+            "连接 {} 写入命令 stdin 失败: {}",
+            connection.name, error
+        ))
+    })?;
+    channel.eof().await.map_err(|error| {
+        AppError::new(format!(
+            "连接 {} 关闭命令 stdin 失败: {}",
+            connection.name, error
+        ))
+    })?;
+    Ok(())
+}
+
+struct ChannelOutput {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    exit_status: Option<u32>,
+}
+
+async fn collect_channel_output(
+    mut channel: russh::Channel<client::Msg>,
+    connection: &Connection,
+    input: Option<CommandInput>,
+) -> AppResult<ChannelOutput> {
+    let mut input_sent = false;
+    if let Some(command_input) = input.as_ref() {
+        if command_input.wait_for.is_none() {
+            send_command_input(&channel, connection, &command_input.data).await?;
+            input_sent = true;
+        }
+    }
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let mut exit_status = None;
-    // 收到 ExitStatus 后，若远端仍有后台进程持有通道 stdout，SSH 服务端不会发送 EOF，
-    // 通道永不关闭。此时最多再等 EOF 一小段时间，超时即视为命令已结束，
-    // 避免被后台进程拖挂到总超时。
+    // 收到退出状态后只短暂等待 EOF，避免后台进程持有 stdout 导致通道永久不关闭。
     const EXIT_STATUS_EOF_TIMEOUT_MS: u64 = 2000;
     let mut after_exit_status = false;
     loop {
@@ -1891,7 +2130,52 @@ async fn execute_remote_command_with_session_async(
             Ok(None) => break,
             Err(_) => break,
         }
+        if !input_sent {
+            if let Some(command_input) = input.as_ref() {
+                if consume_input_marker(command_input, &mut stdout, &mut stderr) {
+                    send_command_input(&channel, connection, &command_input.data).await?;
+                    input_sent = true;
+                }
+            }
+        }
     }
+    Ok(ChannelOutput {
+        stdout,
+        stderr,
+        exit_status,
+    })
+}
+
+async fn execute_remote_command_with_session_async(
+    session: &client::Handle<RusshClient>,
+    connection: &Connection,
+    remote_command: &str,
+    pty: bool,
+    input: Option<CommandInput>,
+) -> AppResult<ExecOutput> {
+    let channel = session.channel_open_session().await.map_err(|error| {
+        AppError::new(format!("连接 {} 打开会话失败: {}", connection.name, error))
+    })?;
+    if pty {
+        channel
+            .request_pty(true, "xterm", 80, 24, 0, 0, &[])
+            .await
+            .map_err(|error| {
+                AppError::new(format!(
+                    "连接 {} 分配伪终端失败: {}",
+                    connection.name, error
+                ))
+            })?;
+    }
+    channel.exec(true, remote_command).await.map_err(|error| {
+        AppError::new(format!("连接 {} 执行命令失败: {}", connection.name, error))
+    })?;
+
+    let ChannelOutput {
+        stdout,
+        stderr,
+        exit_status,
+    } = collect_channel_output(channel, connection, input).await?;
     let stdout = String::from_utf8_lossy(&stdout).trim_end().to_string();
     let stderr = String::from_utf8_lossy(&stderr).trim_end().to_string();
     let code = match exit_status {
@@ -1919,15 +2203,124 @@ async fn execute_remote_command_with_session_async(
     })
 }
 
+async fn execute_sudo_command_async(
+    session: &client::Handle<RusshClient>,
+    connection: &Connection,
+    remote_command: &str,
+    pty: bool,
+) -> AppResult<ExecOutput> {
+    let password = connection
+        .sudo_password
+        .as_deref()
+        .ok_or_else(|| AppError::new("sudo 凭据尚未解密"))?;
+    let mut use_pty = pty;
+    if !use_pty {
+        let probe = execute_remote_command_with_session_async(
+            session,
+            connection,
+            SUDO_REQUIRE_TTY_PROBE,
+            false,
+            None,
+        )
+        .await?;
+        use_pty = sudo_requires_tty(&probe.stdout, &probe.stderr);
+    }
+    let command = sudo_command(&connection.sudo_user, remote_command, use_pty);
+    let input = password_input(password, use_pty.then_some(SUDO_PROMPT_MARKER))?;
+    execute_remote_command_with_session_async(session, connection, &command, use_pty, Some(input))
+        .await
+}
+
+async fn execute_su_command_async(
+    session: &client::Handle<RusshClient>,
+    connection: &Connection,
+    remote_command: &str,
+) -> AppResult<ExecOutput> {
+    let password = connection
+        .su_password
+        .as_deref()
+        .ok_or_else(|| AppError::new("su 凭据尚未解密"))?;
+    let su_pty_probe =
+        execute_remote_command_with_session_async(session, connection, SU_PTY_PROBE, false, None)
+            .await?;
+    if su_pty_probe.exit_code == 0 {
+        let command = su_pty_command(&connection.su_user, remote_command);
+        return execute_remote_command_with_session_async(
+            session,
+            connection,
+            &command,
+            false,
+            Some(password_input(password, None)?),
+        )
+        .await;
+    }
+    let script_probe = execute_remote_command_with_session_async(
+        session,
+        connection,
+        SCRIPT_FALLBACK_PROBE,
+        false,
+        None,
+    )
+    .await?;
+    if script_probe.exit_code != 0 {
+        return Err(AppError::new(
+            "远端 su 不支持 -P/--pty，且 script 不支持安全 fallback 所需的 -c/-e 参数",
+        ));
+    }
+    let command = su_script_command(&connection.su_user, remote_command);
+    execute_remote_command_with_session_async(
+        session,
+        connection,
+        &command,
+        false,
+        Some(password_input(password, Some(SU_READY_MARKER))?),
+    )
+    .await
+}
+
+async fn execute_remote_command_with_privilege_async(
+    session: &client::Handle<RusshClient>,
+    connection: &Connection,
+    remote_command: &str,
+    pty: bool,
+    privilege: Option<PrivilegeMode>,
+) -> AppResult<ExecOutput> {
+    match privilege {
+        None => {
+            execute_remote_command_with_session_async(
+                session,
+                connection,
+                remote_command,
+                pty,
+                None,
+            )
+            .await
+        }
+        Some(PrivilegeMode::Sudo) => {
+            execute_sudo_command_async(session, connection, remote_command, pty).await
+        }
+        Some(PrivilegeMode::Su) => {
+            execute_su_command_async(session, connection, remote_command).await
+        }
+    }
+}
+
 async fn execute_remote_command_async(
     configs: &[Connection],
     connection: &Connection,
     remote_command: &str,
     pty: bool,
+    privilege: Option<PrivilegeMode>,
 ) -> AppResult<ExecOutput> {
     let session = connect_russh(configs, connection).await?;
-    let result =
-        execute_remote_command_with_session_async(&session, connection, remote_command, pty).await;
+    let result = execute_remote_command_with_privilege_async(
+        &session,
+        connection,
+        remote_command,
+        pty,
+        privilege,
+    )
+    .await;
     let _ = session
         .disconnect(Disconnect::ByApplication, "", "English")
         .await;
@@ -1940,10 +2333,11 @@ fn execute_remote_command(
     remote_command: &str,
     timeout_ms: u64,
     pty: bool,
+    privilege: Option<PrivilegeMode>,
 ) -> AppResult<ExecOutput> {
     run_with_timeout(
         timeout_ms,
-        execute_remote_command_async(configs, connection, remote_command, pty),
+        execute_remote_command_async(configs, connection, remote_command, pty, privilege),
     )
 }
 
@@ -2748,6 +3142,24 @@ mod tests {
     }
 
     #[test]
+    fn parse_exec_supports_privilege_modes_and_rejects_conflict() {
+        let sudo = parse_execute_args(vec!["--sudo".into(), "server".into(), "id".into()]).unwrap();
+        assert_eq!(sudo.privilege, Some(PrivilegeMode::Sudo));
+
+        let su = parse_execute_args(vec!["--su".into(), "server".into(), "id".into()]).unwrap();
+        assert_eq!(su.privilege, Some(PrivilegeMode::Su));
+
+        let error = parse_execute_args(vec![
+            "--sudo".into(),
+            "--su".into(),
+            "server".into(),
+            "id".into(),
+        ])
+        .unwrap_err();
+        assert!(error.to_string().contains("--sudo 和 --su"));
+    }
+
+    #[test]
     fn parse_exec_supports_json_flag() {
         let parsed = parse_execute_args(vec![
             "--json".into(),
@@ -2972,6 +3384,53 @@ mod tests {
     }
 
     #[test]
+    fn privilege_is_disabled_by_default_and_must_be_enabled() {
+        let (_dir, path) = write_config(
+            r#"[{"name":"server","host":"127.0.0.1","username":"user","password":"ssh-secret"}]"#,
+        );
+        let error =
+            load_config_for_execute(&path, "server", Some(PrivilegeMode::Sudo)).unwrap_err();
+        assert!(error.to_string().contains("未开启 privilegeEnabled"));
+
+        let (_dir, path) = write_config(
+            r#"[{"name":"server","host":"127.0.0.1","username":"user","password":"ssh-secret","privilegeEnabled":true}]"#,
+        );
+        let configs = load_config_for_execute(&path, "server", Some(PrivilegeMode::Sudo)).unwrap();
+        let connection = find_connection(&configs, "server").unwrap();
+        assert_eq!(connection.sudo_password.as_deref(), Some("ssh-secret"));
+    }
+
+    #[test]
+    fn privilege_credentials_migrate_to_isolated_secret_keys() {
+        let (_dir, path) = write_config(
+            r#"[{"name":"server","host":"127.0.0.1","username":"user","password":"ssh","privilegeEnabled":true,"sudoPassword":"sudo-secret","suPassword":"su-secret"}]"#,
+        );
+        assert!(migrate_plain_password_for_connection(&path, "server").unwrap());
+        prepare_privilege_config(&path, "server", PrivilegeMode::Sudo).unwrap();
+        prepare_privilege_config(&path, "server", PrivilegeMode::Su).unwrap();
+
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("sudo-secret"));
+        assert!(!raw.contains("su-secret"));
+        assert!(raw.contains(r#""sudoPasswordRef": "agentsshcli:server:sudo""#));
+        assert!(raw.contains(r#""suPasswordRef": "agentsshcli:server:su""#));
+
+        let secrets = load_secrets(&path).unwrap();
+        assert!(secrets.items.contains_key("agentsshcli:server"));
+        assert!(secrets.items.contains_key("agentsshcli:server:sudo"));
+        assert!(secrets.items.contains_key("agentsshcli:server:su"));
+    }
+
+    #[test]
+    fn su_requires_an_explicit_target_password() {
+        let (_dir, path) = write_config(
+            r#"[{"name":"server","host":"127.0.0.1","username":"user","password":"ssh-secret","privilegeEnabled":true}]"#,
+        );
+        let error = load_config_for_execute(&path, "server", Some(PrivilegeMode::Su)).unwrap_err();
+        assert!(error.to_string().contains("缺少 suPassword"));
+    }
+
+    #[test]
     fn load_config_for_connection_ignores_unrelated_missing_password_ref() {
         let (_dir, path) = write_config(
             r#"[
@@ -3174,6 +3633,7 @@ struct DaemonRequest {
     remote_path: Option<String>,
     cache_ttl_ms: Option<u64>,
     pty: Option<bool>,
+    privilege: Option<PrivilegeMode>,
     recursive: Option<bool>,
 }
 
@@ -3256,6 +3716,7 @@ fn request_daemon_execute(parsed: &ExecuteArgs, command: &str) -> AppResult<Daem
         "timeout": parsed.timeout_ms,
         "cacheTtlMs": cache_ttl(&parsed.global),
         "pty": parsed.pty,
+        "privilege": parsed.privilege,
     });
     request_daemon(&config_path, &request)
 }
@@ -3725,6 +4186,71 @@ fn expire_connections(connections: &mut HashMap<String, PoolEntry>) {
     }
 }
 
+#[derive(Clone, Copy)]
+struct DaemonExecuteOptions {
+    pty: bool,
+    privilege: Option<PrivilegeMode>,
+    timeout_ms: u64,
+}
+fn handle_daemon_execute(
+    state: &DaemonState,
+    entry: &mut PoolEntry,
+    connection: &Connection,
+    remote_command: &str,
+    options: DaemonExecuteOptions,
+) -> AppResult<DaemonResponse> {
+    let execute_result = state.run_with_timeout(
+        options.timeout_ms,
+        execute_remote_command_with_privilege_async(
+            &entry.session,
+            connection,
+            remote_command,
+            options.pty,
+            options.privilege,
+        ),
+    );
+    // 仅当会话异常/连接失败（Err）时重连重试；远端非零退出码不会重试。
+    let output = match execute_result {
+        Ok(output) => output,
+        Err(error) => {
+            let _ = state.run_with_timeout(options.timeout_ms, async {
+                entry
+                    .session
+                    .disconnect(Disconnect::ByApplication, "", "English")
+                    .await
+                    .map_err(|error| AppError::new(format!("断开失效 SSH 缓存连接失败: {}", error)))
+            });
+            let session = state.run_with_timeout(
+                options.timeout_ms,
+                connect_russh(&state.configs, connection),
+            )?;
+            let output = state
+                .run_with_timeout(
+                    options.timeout_ms,
+                    execute_remote_command_with_privilege_async(
+                        &session,
+                        connection,
+                        remote_command,
+                        options.pty,
+                        options.privilege,
+                    ),
+                )
+                .map_err(|retry_error| {
+                    AppError::new(format!("{}；已重连重试仍失败: {}", error, retry_error))
+                })?;
+            entry.session = session;
+            output
+        }
+    };
+    Ok(DaemonResponse {
+        ok: true,
+        message: None,
+        stdout: Some(output.stdout),
+        exit_code: Some(output.exit_code),
+        stderr: Some(output.stderr),
+    })
+}
+
 fn handle_daemon_stream<S: Read + Write>(
     stream: &mut S,
     bound_config_path: &Path,
@@ -3768,6 +4294,14 @@ fn handle_daemon_stream<S: Read + Write>(
         &mut state.configs,
         &request.connection_name,
     )?;
+    if let Some(mode) = request.privilege {
+        resolve_privilege_credentials(
+            bound_config_path,
+            &mut state.configs,
+            &request.connection_name,
+            mode,
+        )?;
+    }
     validate_jump_hosts(&state.configs)?;
     let connection = find_connection(&state.configs, &request.connection_name)?.clone();
     if request.operation == "execute" {
@@ -3809,57 +4343,17 @@ fn handle_daemon_stream<S: Read + Write>(
                 }
                 None => command,
             };
-            let pty = resolve_pty(&connection, request.pty);
-            let execute_result = state.run_with_timeout(
-                request.timeout.unwrap_or(30000),
-                execute_remote_command_with_session_async(
-                    &entry.session,
-                    &connection,
-                    &remote_command,
-                    pty,
-                ),
-            );
-            // 仅当会话异常/连接失败（Err）时重连重试；命令非零退出（Ok 且 exit_code != 0）不重试。
-            let output = match execute_result {
-                Ok(output) => output,
-                Err(error) => {
-                    let _ = state.run_with_timeout(request.timeout.unwrap_or(30000), async {
-                        entry
-                            .session
-                            .disconnect(Disconnect::ByApplication, "", "English")
-                            .await
-                            .map_err(|error| {
-                                AppError::new(format!("断开失效 SSH 缓存连接失败: {}", error))
-                            })
-                    });
-                    let session = state.run_with_timeout(
-                        request.timeout.unwrap_or(30000),
-                        connect_russh(&state.configs, &connection),
-                    )?;
-                    let output = state
-                        .run_with_timeout(
-                            request.timeout.unwrap_or(30000),
-                            execute_remote_command_with_session_async(
-                                &session,
-                                &connection,
-                                &remote_command,
-                                pty,
-                            ),
-                        )
-                        .map_err(|retry_error| {
-                            AppError::new(format!("{}；已重连重试仍失败: {}", error, retry_error))
-                        })?;
-                    entry.session = session;
-                    output
-                }
-            };
-            DaemonResponse {
-                ok: true,
-                message: None,
-                stdout: Some(output.stdout),
-                exit_code: Some(output.exit_code),
-                stderr: Some(output.stderr),
-            }
+            handle_daemon_execute(
+                state,
+                &mut entry,
+                &connection,
+                &remote_command,
+                DaemonExecuteOptions {
+                    pty: resolve_pty(&connection, request.pty),
+                    privilege: request.privilege,
+                    timeout_ms: request.timeout.unwrap_or(30000),
+                },
+            )?
         }
         "upload" => {
             let local = request
