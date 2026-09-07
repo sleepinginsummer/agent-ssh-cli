@@ -1,6 +1,6 @@
 [package]
 name = "agentsshcli-native"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 
 [[bin]]
@@ -17,7 +17,7 @@ sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 url = "2"
-russh = "0.60.2"
+russh = "0.60.3"
 russh-sftp = "2.1.2"
 tokio = { version = "1.52.3", features = ["fs", "io-util", "net", "rt-multi-thread", "time"] }
 

@@ -1,7 +1,7 @@
 # agent-ssh-cli 改造计划
 
 > 基于 2026-08-01 真实使用（多服务器排查、19MB 大文件传输、跳板管理）的实战反馈整理。
-> 当前版本：v0.5.0，Rust 主程序入口为 `native/src/main.rs`，提权纯逻辑位于 `native/src/privilege.rs`。
+> 当前版本：v0.5.1，Rust 主程序入口为 `native/src/main.rs`，提权纯逻辑位于 `native/src/privilege.rs`。
 > 状态：P0/P1 已实施完成（2026-08-01），见文末「实施记录」。
 
 ## 优先级总览

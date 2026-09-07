@@ -1,5 +1,24 @@
 # Release Notes
 
+## v0.5.1
+
+修复 russh 安全依赖并强化 agent Skill 的 sudo/su 使用规则：
+
+- 将 `russh` 从 0.60.2 升级到修复版本 0.60.3，并同步将 `russh-cryptovec` 从 0.59.0 升级到 0.60.3。
+- 修复 CVE-2026-46673 / GHSA-g9f8-wqj9-fjw5 / RUSTSEC-2026-0153 涉及的未检查容量增长、长度运算和不安全内存处理风险。
+- 明确通过非 root 连接提权时必须使用 CLI 顶层 `--sudo` / `--su` 参数，且参数必须位于连接名之前。
+- 明确禁止把 `sudo`、`sudo -S`、`sudo -n`、`su` 或 `su -c` 拼入远端命令，避免绕过 CLI 的提权密码通道。
+- 补充正确与错误命令示例，并明确不能根据普通 `su -c` 超时判断 CLI 不支持密码输入。
+- 明确 `--su --json` 的 `stderr` 可能包含无敏感信息的 `Password:` 提示，应结合 `exitCode` 与身份输出判断结果。
+- 修正凭据说明：密码可加密保存到本机 `secrets.json`，不会输出明文，仅通过 SSH channel stdin 发送。
+
+验证：
+
+- `npm test` 通过，共 40 项测试。
+- `npm run build:native` 通过。
+- 依赖树确认 `russh` 与 `russh-cryptovec` 均为 0.60.3。
+- `tangshan` 远端 `--su` 直连与 daemon 模式验证通过，均成功切换为 root（UID 0）。
+
 ## v0.5.0
 
 新增安全的 sudo/su 提权执行通道：
