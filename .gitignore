@@ -6,7 +6,9 @@ config.json
 native/target/
 native-bin/
 
+# 平台子包目录全部由 scripts/build-native-package.js 生成，不入库。
 npm/*/bin/
+npm/*/package.json
 npm/*/*.tgz
 task.md
 
