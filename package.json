@@ -20,7 +20,7 @@
     "agentsshcli": "bin/agentsshcli.js"
   },
   "scripts": {
-    "test": "node --check bin/agentsshcli.js && cargo test --manifest-path native/Cargo.toml",
+    "test": "node --check bin/agentsshcli.js && node scripts/check-cfg-ports.js && cargo test --manifest-path native/Cargo.toml",
     "build:native": "cargo build --release --manifest-path native/Cargo.toml",
     "test:native": "cargo test --manifest-path native/Cargo.toml",
     "build:native-bin": "node scripts/build-native-bin.js",
