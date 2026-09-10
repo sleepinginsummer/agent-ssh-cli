@@ -2,21 +2,17 @@
 //
 // 依赖 `ssh`/`exec`/`transfer`/`runtime` 完成实际动作；CLI 侧只通过下方四个 pub(crate) 入口交互。
 
-use crate::exec::execute_remote_command_with_privilege_async;
+use crate::exec::{command_with_directory, execute_remote_command_with_privilege_async};
 use crate::runtime::block_with_timeout;
 use crate::ssh::{connect_russh, RusshClient};
 use crate::transfer::{
     download_dir_with_session_async, download_file_with_session_async,
     upload_dir_with_session_async, upload_file_with_session_async,
 };
-use crate::{
-    canonical_or_absolute, find_connection, load_config, lock_file_exclusive, path_absolute,
-    path_absolute_from, project_root, resolve_jump_password_refs, resolve_password_ref_for_connection,
-    resolve_privilege_credentials, resolve_pty, shell_json_quote, unlock_file, validate_command,
-    validate_jump_hosts, AppError, AppResult, ConfigSnapshot, Connection,
-    ExecuteArgs, GlobalArgs, PrivilegeMode, TransferArgs, DAEMON_REQUEST_TIMEOUT_MS,
-    DAEMON_RESPONSE_LENGTH_BYTES, DAEMON_START_TIMEOUT_MS, DEFAULT_CACHE_TTL_MS,
-};
+use crate::privilege::PrivilegeMode;
+use crate::{AppError, AppResult};
+use crate::config::{canonical_or_absolute, find_connection, load_config, lock_file_exclusive, path_absolute, path_absolute_from, project_root, resolve_jump_password_refs, resolve_password_ref_for_connection, resolve_privilege_credentials, resolve_pty, unlock_file, validate_command, validate_jump_hosts, ConfigSnapshot, Connection};
+
 use russh::{client, Disconnect};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -32,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 #[cfg(windows)]
-use crate::home_dir;
+use crate::config::home_dir;
 #[cfg(windows)]
 use interprocess::local_socket::{
     prelude::*, GenericNamespaced, ListenerOptions, Stream as LocalSocketStream,
@@ -102,8 +98,54 @@ impl DaemonState {
     }
 }
 
-fn cache_ttl(global: &GlobalArgs) -> u64 {
-    global.cache_ttl_ms.unwrap_or(DEFAULT_CACHE_TTL_MS)
+const DEFAULT_CACHE_TTL_MS: u64 = 180_000;
+const DAEMON_START_TIMEOUT_MS: u64 = 3_000;
+const DAEMON_REQUEST_TIMEOUT_MS: u64 = 86_400_000;
+const DAEMON_RESPONSE_LENGTH_BYTES: usize = 8;
+
+// CLI 侧调用 daemon 的请求 DTO：daemon 不认识 CLI 解析层类型（Args），只接收这里的字段。
+pub(crate) struct DaemonClientConfig {
+    pub(crate) config_path: PathBuf,
+    pub(crate) cache_ttl_ms: Option<u64>,
+}
+
+pub(crate) struct DaemonExecRequest {
+    pub(crate) client: DaemonClientConfig,
+    pub(crate) connection_name: String,
+    pub(crate) command: String,
+    pub(crate) directory: Option<String>,
+    pub(crate) timeout_ms: Option<u64>,
+    pub(crate) pty: Option<bool>,
+    pub(crate) privilege: Option<PrivilegeMode>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum DaemonTransferOperation {
+    Upload,
+    Download,
+}
+
+impl DaemonTransferOperation {
+    fn as_str(self) -> &'static str {
+        match self {
+            DaemonTransferOperation::Upload => "upload",
+            DaemonTransferOperation::Download => "download",
+        }
+    }
+}
+
+pub(crate) struct DaemonTransferRequest {
+    pub(crate) client: DaemonClientConfig,
+    pub(crate) operation: DaemonTransferOperation,
+    pub(crate) connection_name: String,
+    pub(crate) local_path: String,
+    pub(crate) remote_path: String,
+    pub(crate) timeout_ms: Option<u64>,
+    pub(crate) recursive: bool,
+}
+
+fn cache_ttl(client: &DaemonClientConfig) -> u64 {
+    client.cache_ttl_ms.unwrap_or(DEFAULT_CACHE_TTL_MS)
 }
 
 pub(crate) fn request_stop_daemon(config_path: &Path) -> AppResult<()> {
@@ -123,37 +165,37 @@ pub(crate) fn request_stop_daemon(config_path: &Path) -> AppResult<()> {
     Ok(())
 }
 
-pub(crate) fn request_daemon_execute(parsed: &ExecuteArgs, command: &str) -> AppResult<DaemonResponse> {
-    let config_path = path_absolute(&parsed.global.config_path)?;
-    let request = serde_json::json!({
+pub(crate) fn request_daemon_execute(request: &DaemonExecRequest) -> AppResult<DaemonResponse> {
+    let config_path = path_absolute(&request.client.config_path)?;
+    let payload = serde_json::json!({
         "operation": "execute",
         "configPath": config_path,
         "cwd": env::current_dir()?,
-        "connectionName": parsed.connection_name,
-        "command": command,
-        "directory": parsed.directory,
-        "timeout": parsed.timeout_ms,
-        "cacheTtlMs": cache_ttl(&parsed.global),
-        "pty": parsed.pty,
-        "privilege": parsed.privilege,
+        "connectionName": request.connection_name,
+        "command": request.command,
+        "directory": request.directory,
+        "timeout": request.timeout_ms,
+        "cacheTtlMs": cache_ttl(&request.client),
+        "pty": request.pty,
+        "privilege": request.privilege,
     });
-    request_daemon(&config_path, &request)
+    request_daemon(&config_path, &payload)
 }
 
-pub(crate) fn request_daemon_transfer(parsed: &TransferArgs, operation: &str) -> AppResult<()> {
-    let config_path = path_absolute(&parsed.global.config_path)?;
-    let request = serde_json::json!({
-        "operation": operation,
+pub(crate) fn request_daemon_transfer(request: &DaemonTransferRequest) -> AppResult<()> {
+    let config_path = path_absolute(&request.client.config_path)?;
+    let payload = serde_json::json!({
+        "operation": request.operation.as_str(),
         "configPath": config_path,
         "cwd": env::current_dir()?,
-        "connectionName": parsed.connection_name,
-        "localPath": parsed.local_path,
-        "remotePath": parsed.remote_path,
-        "timeout": parsed.timeout_ms,
-        "recursive": parsed.recursive,
-        "cacheTtlMs": cache_ttl(&parsed.global),
+        "connectionName": request.connection_name,
+        "localPath": request.local_path,
+        "remotePath": request.remote_path,
+        "timeout": request.timeout_ms,
+        "recursive": request.recursive,
+        "cacheTtlMs": cache_ttl(&request.client),
     });
-    request_daemon(&config_path, &request)?;
+    request_daemon(&config_path, &payload)?;
     Ok(())
 }
 
@@ -801,12 +843,7 @@ fn dispatch_daemon_operation(
                 .command
                 .as_deref()
                 .ok_or_else(|| AppError::new("daemon execute 缺少 command"))?;
-            let remote_command = match request.directory.as_deref() {
-                Some(directory) => {
-                    format!("cd -- {} && {}", shell_json_quote(directory)?, command)
-                }
-                None => command.to_string(),
-            };
+            let remote_command = command_with_directory(request.directory.as_deref(), command)?;
             handle_daemon_execute(
                 state,
                 entry,

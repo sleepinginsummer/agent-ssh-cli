@@ -9,7 +9,9 @@ use crate::privilege::{
 };
 use crate::runtime::run_with_timeout;
 use crate::ssh::{connect_russh, RusshClient};
-use crate::{AppError, AppResult, Connection};
+use crate::{AppError, AppResult};
+use crate::config::{Connection};
+
 use russh::{client, ChannelMsg, Disconnect};
 use std::time::Duration;
 
@@ -326,4 +328,13 @@ pub(crate) fn execute_remote_command(
         timeout_ms,
         execute_remote_command_async(configs, connection, remote_command, pty, privilege),
     )
+}
+
+// 组合远端命令：可选的目录切换前缀 + 命令本体。目录名按 JSON 字符串转义，
+// 避免带空格/引号的路径破坏 `cd -- <dir> && <command>` 结构。
+pub(crate) fn command_with_directory(directory: Option<&str>, command: &str) -> AppResult<String> {
+    match directory {
+        Some(directory) => Ok(format!("cd -- {} && {}", serde_json::to_string(directory)?, command)),
+        None => Ok(command.to_string()),
+    }
 }

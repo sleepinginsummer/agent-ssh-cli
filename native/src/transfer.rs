@@ -4,7 +4,9 @@
 
 use crate::runtime::{block_with_timeout, run_with_timeout};
 use crate::ssh::{connect_russh, RusshClient};
-use crate::{AppError, AppResult, Connection};
+use crate::{AppError, AppResult};
+use crate::config::{Connection};
+
 use russh::{client, Disconnect};
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::OpenFlags;

@@ -2,7 +2,9 @@
 //
 // 与 `exec.rs` 的分工：本模块只负责把会话建好，命令执行与提权编排由 `exec.rs` 负责。
 
-use crate::{find_connection, AppError, AppResult, Connection};
+use crate::{AppError, AppResult};
+use crate::config::{find_connection, Connection};
+
 use russh::keys::{load_secret_key, PrivateKeyWithHashAlg};
 use russh::{client, Preferred};
 use std::borrow::Cow;
