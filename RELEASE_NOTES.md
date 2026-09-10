@@ -1,14 +1,17 @@
 # Release Notes
 
-## v0.5.3
+## v0.5.4
 
-修复 `download` 命名参数倒置，并把原生程序按职责拆分为模块：
+修复 `download` 命名参数倒置，把原生程序按职责拆分为模块，并修复拆分引入的 Windows 构建失败：
+
+> v0.5.3 的 tag 曾推送，但 win32-x64 构建失败导致主包与 Release 未发布，故本次以 v0.5.4 重新发布；npm 上可能残留 v0.5.3 的 4 个平台包（无主包引用，不影响安装）。
 
 - 修复 `download --remote <path> --local <path>` 把两个路径互换的问题：`parse_transfer_args` 在 download 分支先按 upload 语义取值再按变量名解释，导致远端 stat 打到本地路径上，命名参数形式必然报「读取远端文件信息失败: No such file」。
 - 重构为 `TransferMode` 枚举：`--local`/`--remote` 始终解析到同名字段，两个子命令的差异只体现在位置参数顺序（upload 为 local → remote，download 为 remote → local），并补充命名参数语义的回归测试。
 - `native/src/main.rs` 由 4539 行拆分到 2232 行：新增 `daemon.rs`（协议/进程生命周期/连接池/请求分发）、`transfer.rs`（SFTP 传输）、`ssh.rs`（建连与认证）、`exec.rs`（命令执行与提权编排）、`runtime.rs`（runtime/超时封装）；`privilege.rs` 保持纯逻辑不变。
 - `handle_daemon_stream` 由约 200 行拆为 33 行路由，配合 `prepare_daemon_request`、`acquire_pool_entry`、`dispatch_daemon_operation`、`handle_daemon_upload`、`handle_daemon_download`，行为保持不变。
 - 模块依赖单向化：`exec`/`transfer` 直接依赖 `ssh`、`runtime` 与根级共享类型，不再经由入口模块的私有导入别名。
+- 修复拆分引入的 Windows 构建失败：`daemon.rs` 的 windows 版 `run_daemon` 忘记提升为 `pub(crate)`，且 windows 分支使用的 `home_dir` 未导入；该问题只在 `cfg(windows)` 下暴露，Linux/macOS 冒烟无法发现，现由 CI 的 win32-x64 构建验证。
 
 验证：
 

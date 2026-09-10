@@ -32,6 +32,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 #[cfg(windows)]
+use crate::home_dir;
+#[cfg(windows)]
 use interprocess::local_socket::{
     prelude::*, GenericNamespaced, ListenerOptions, Stream as LocalSocketStream,
 };
@@ -513,7 +515,7 @@ pub(crate) fn run_daemon(argv: Vec<String>) -> AppResult<()> {
 }
 
 #[cfg(windows)]
-fn run_daemon(argv: Vec<String>) -> AppResult<()> {
+pub(crate) fn run_daemon(argv: Vec<String>) -> AppResult<()> {
     let (socket_path, config_path) = parse_daemon_args(argv)?;
     let pipe_name = windows_pipe_name_from_path(&socket_path);
     let name = pipe_name

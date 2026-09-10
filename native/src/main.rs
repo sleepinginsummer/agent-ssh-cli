@@ -8,10 +8,6 @@ mod transfer;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-#[cfg(windows)]
-use interprocess::local_socket::{
-    prelude::*, GenericNamespaced, ListenerOptions, Stream as LocalSocketStream,
-};
 use daemon::{request_daemon_execute, request_daemon_transfer, request_stop_daemon, run_daemon};
 use exec::{execute_remote_command, ExecOutput};
 use transfer::{download_dir, download_file, upload_dir, upload_file};

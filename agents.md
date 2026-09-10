@@ -52,6 +52,7 @@ agent-ssh-cli 项目说明与发布流程，供 AI agent 与维护者使用。
 ## 验证基线
 
 - `npm test`（node --check + cargo test）
+- Windows 目标无法在 macOS/Linux 本地验证：`cargo check --target x86_64-pc-windows-msvc` 会在依赖 `aws-lc-sys` 处因缺少 `windows.h` 失败。改动涉及 `#[cfg(windows)]` 分支时必须靠 CI 的 `publish-platform (win32-x64)` job 验证；该 job 失败会连带跳过 `publish-main` 与 `create-release`，整次发布作废。
 - `npm run build:native`（release 构建）
 - 冒烟：`exec` / `upload` / `download` 双模式、`list`
 
