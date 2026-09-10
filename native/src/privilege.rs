@@ -1,12 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 pub const SUDO_PROMPT_MARKER: &str = "__AGENTSSHCLI_SUDO_PASSWORD__";
-pub const SU_READY_MARKER: &str = "__AGENTSSHCLI_SU_READY__";
 pub const SUDO_REQUIRE_TTY_PROBE: &str = "sudo -n true";
 pub const SU_PTY_PROBE: &str =
     "su --help 2>&1 | grep -Eq -- '(^|[[:space:],])-P([,[:space:]]|$)|--pty'";
-pub const SCRIPT_FALLBACK_PROBE: &str =
-    "script --help 2>&1 | grep -q -- '--command' && script --help 2>&1 | grep -q -- '--return'";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -72,21 +69,12 @@ pub fn su_pty_command(user: &str, command: &str) -> String {
     )
 }
 
-pub fn su_script_command(user: &str, command: &str) -> String {
-    let su_command = format!(
+pub fn su_command(user: &str, command: &str) -> String {
+    // su 的 stdin 是 SSH 通道管道（非 tty），PAM 会逐字节读取到换行符，密码可在提示符之前写入。
+    format!(
         "su -c {} {}",
         shell_single_quote(&inner_command(command)),
         user
-    );
-    // script 的子终端先关闭 ECHO 并输出同步标记，调用方看到标记后才发送密码。
-    let script_inner = format!(
-        "stty -echo; printf %s {}; exec {}",
-        shell_single_quote(SU_READY_MARKER),
-        su_command
-    );
-    format!(
-        "script -q -e -c {} /dev/null",
-        shell_single_quote(&script_inner)
     )
 }
 
@@ -128,10 +116,12 @@ mod tests {
     }
 
     #[test]
-    fn su_script_waits_until_echo_is_disabled() {
-        let command = su_script_command("oracle", "echo 'hello'");
-        assert!(command.contains("stty -echo; printf %s"));
-        assert!(command.contains(SU_READY_MARKER));
-        assert!(command.contains("su -c"));
+    fn su_reads_password_from_pipe_without_pty_wrapper() {
+        let command = su_command("oracle", "echo 'hello'");
+        assert_eq!(
+            command,
+            "su -c 'exec </dev/null; echo '\"'\"'hello'\"'\"'' oracle"
+        );
+        assert!(!command.contains("script"));
     }
 }

@@ -1,5 +1,21 @@
 # Release Notes
 
+## v0.5.2
+
+修复 CentOS 7 等旧 su 环境下 `--su` 无法提权（或静默假成功）的问题：
+
+- 移除 `script` 回退通道：`script` 在 stdin 非 tty 时创建的 pty termios 未初始化（实测 `-icanon min=0 time=0`），而 PAM 读取密码前执行 `tcsetattr(TCSAFLUSH)` 会丢弃提示符之前到达的密码，su 只能拿到空密码。
+- 移除 `script` 回退通道：`script` 把 stdin EOF 视为会话结束，收到 EOF 后立刻关闭伪终端并以子进程退出码 0 退出，正在认证的 su 被终止，表现为只有 `Password:` 的静默成功（exitCode 0）。
+- 无 `-P/--pty` 能力的 su 改为 `su -c '<command>' <user>`，密码直接走 SSH channel stdin，与 `sudo -S`、`su -P` 路径一致。
+- 删除随之失效的 `SU_READY_MARKER`、`SCRIPT_FALLBACK_PROBE`、`su_script_command` 与 `CommandInput.close_stdin` 分支。
+
+验证：
+
+- `npm test` 通过，共 40 项测试。
+- `npm run build:native` 通过。
+- CentOS 7.6（util-linux 2.23.2，无 `-P`）`web正式1`、`web正式2` 的 `--su` 直连与 daemon 模式均返回 `root` / UID 0。
+- `tangshan`（util-linux 2.32.1，`-P` 路径）回归通过，`--su` 返回 `root` / UID 0。
+
 ## v0.5.1
 
 修复 russh 安全依赖并强化 agent Skill 的 sudo/su 使用规则：

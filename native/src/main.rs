@@ -8,9 +8,9 @@ use interprocess::local_socket::{
     prelude::*, GenericNamespaced, ListenerOptions, Stream as LocalSocketStream,
 };
 use privilege::{
-    credential_fields, su_pty_command, su_script_command, sudo_command, sudo_requires_tty,
-    validate_unix_username, PrivilegeMode, SCRIPT_FALLBACK_PROBE, SUDO_PROMPT_MARKER,
-    SUDO_REQUIRE_TTY_PROBE, SU_PTY_PROBE, SU_READY_MARKER,
+    credential_fields, su_command, su_pty_command, sudo_command, sudo_requires_tty,
+    validate_unix_username, PrivilegeMode, SUDO_PROMPT_MARKER, SUDO_REQUIRE_TTY_PROBE,
+    SU_PTY_PROBE,
 };
 use rand_core::{OsRng, RngCore};
 use regex::Regex;
@@ -2031,6 +2031,8 @@ struct ExecOutput {
 #[derive(Debug, Clone)]
 struct CommandInput {
     data: Vec<u8>,
+    // 部分提权实现（sudo 分配伪终端时）会输出自定义提示标记，
+    // 需等到标记出现后再写入密码，避免密码被终端回显或提前丢弃。
     wait_for: Option<Vec<u8>>,
 }
 
@@ -2046,7 +2048,6 @@ fn password_input(password: &str, wait_for: Option<&str>) -> AppResult<CommandIn
         wait_for: wait_for.map(|marker| marker.as_bytes().to_vec()),
     })
 }
-
 fn strip_first_marker(buffer: &mut Vec<u8>, marker: &[u8]) -> bool {
     let Some(index) = buffer
         .windows(marker.len())
@@ -2254,26 +2255,19 @@ async fn execute_su_command_async(
         )
         .await;
     }
-    let script_probe = execute_remote_command_with_session_async(
-        session,
-        connection,
-        SCRIPT_FALLBACK_PROBE,
-        false,
-        None,
-    )
-    .await?;
-    if script_probe.exit_code != 0 {
-        return Err(AppError::new(
-            "远端 su 不支持 -P/--pty，且 script 不支持安全 fallback 所需的 -c/-e 参数",
-        ));
-    }
-    let command = su_script_command(&connection.su_user, remote_command);
+    // 无 -P/--pty 能力的旧版 su（CentOS 7 util-linux 2.23 等）：直接用管道 stdin 传密码，
+    // 与 -P 路径及 sudo -S 路径一致，PAM 从非 tty stdin 逐字节读取密码，不受终端缓冲影响。
+    // 不能改用 `script` 包一层 pty：script 在 stdin 非 tty 时 openpty 会拿到未初始化的
+    // termios（实测 -icanon min=0 time=0），而 PAM 读取前执行 tcsetattr(TCSAFLUSH)
+    // 会丢弃提示符之前到达的密码，su 只能收到空密码；同时该 pty 会话在 stdin EOF 时
+    // 被 script 立即关闭并以状态 0 退出，表现为只有 Password: 的静默假成功。
+    let command = su_command(&connection.su_user, remote_command);
     execute_remote_command_with_session_async(
         session,
         connection,
         &command,
         false,
-        Some(password_input(password, Some(SU_READY_MARKER))?),
+        Some(password_input(password, None)?),
     )
     .await
 }
