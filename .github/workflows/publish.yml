@@ -106,6 +106,12 @@ jobs:
         with:
           name: platform-package-${{ matrix.platform }}-${{ matrix.arch }}
           path: npm/${{ matrix.platform }}-${{ matrix.arch }}
+      # artifact 上传/下载不保留文件权限，未修复会导致平台包二进制丢失可执行位（v0.5.5 曾因此发布出不可运行的包）。
+      - name: Restore executable bit
+        if: matrix.platform != 'win32'
+        shell: bash
+        working-directory: npm/${{ matrix.platform }}-${{ matrix.arch }}
+        run: chmod +x bin/agentsshcli-native
       - name: Publish platform package
         shell: bash
         working-directory: npm/${{ matrix.platform }}-${{ matrix.arch }}

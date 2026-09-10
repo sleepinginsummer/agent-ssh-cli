@@ -1,7 +1,7 @@
 # agent-ssh-cli 改造计划
 
 > 基于 2026-08-01 真实使用（多服务器排查、19MB 大文件传输、跳板管理）的实战反馈整理。
-> 当前版本：v0.5.5。Rust 主程序已按职责拆分：`main.rs`（CLI/配置/共享类型）、`daemon.rs`（daemon 与连接池）、`transfer.rs`（SFTP 传输）、`ssh.rs`（建连认证）、`exec.rs`（命令执行与提权编排）、`privilege.rs`（提权命令字符串）、`runtime.rs`（runtime/超时封装）。
+> 当前版本：v0.5.6。Rust 主程序已按职责拆分：`main.rs`（CLI/配置/共享类型）、`daemon.rs`（daemon 与连接池）、`transfer.rs`（SFTP 传输）、`ssh.rs`（建连认证）、`exec.rs`（命令执行与提权编排）、`privilege.rs`（提权命令字符串）、`runtime.rs`（runtime/超时封装）。
 > 状态：P0/P1 已实施完成（2026-08-01），见文末「实施记录」。
 
 ## 优先级总览

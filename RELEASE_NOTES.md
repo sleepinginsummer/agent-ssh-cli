@@ -1,6 +1,23 @@
 # Release Notes
 
+## v0.5.6
+
+修复 v0.5.5 平台子包丢失可执行位导致 macOS/Linux 无法运行的问题：
+
+- 根因：新的两阶段发布流程里，`actions/upload-artifact` / `download-artifact` 不保留文件权限，平台包二进制从 artifact 取回后变成 `0644`，`npm publish` 如实打包，安装后运行报 `EACCES`（对比 v0.5.4 的 tarball 为 `0755`）。
+- 修复：`publish-platform` 在发布前恢复可执行位（非 win32 平台 `chmod +x bin/agentsshcli-native`），并本地复现验证打包后 tarball 权限为 `-rwxr-xr-x`。
+- v0.5.5 的内容（模块化拆分与平台分支守卫）继续保留在 v0.5.6 中，命令行为与 v0.5.4 一致。
+
+验证：
+
+- `npm test` 通过：平台分支检查 + 41 项测试。
+- `npm run build:native` 通过，`--version` 输出 0.5.6。
+- 本地模拟 artifact 往返（0644）+ chmod 后 `npm pack`，tarball 内权限为 `-rwxr-xr-x`。
+- 发布后核对 5 个平台包的 tarball 权限，并安装全局 CLI 复验 `--version` 与真机冒烟。
+
 ## v0.5.5
+
+> ⚠ 该版本的平台子包缺少可执行位（两阶段发布流水线的 artifact 往返丢失文件权限），macOS/Linux 安装后运行会报 EACCES，请直接使用 v0.5.6。
 
 原生程序按职责完成模块化拆分，并补上平台分支守卫；命令行为与 v0.5.4 一致。
 
