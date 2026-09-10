@@ -8,7 +8,6 @@ mod ssh;
 mod transfer;
 
 use std::env;
-#[cfg(unix)]
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 

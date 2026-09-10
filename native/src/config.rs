@@ -209,34 +209,74 @@ fn normalize_privilege_user(
     Ok(user)
 }
 
+// 连接归一化按「端点 / 认证 / 可选引用 / 提权」分组，helper 各自负责字段校验与错误信息，
+// normalize_entry 只做组装，避免单个函数堆叠十余个分支。
+struct NormalizedEndpoint {
+    name: String,
+    host: String,
+    port: u16,
+    username: String,
+}
+
+struct NormalizedAuth {
+    password: Option<String>,
+    password_ref: Option<String>,
+    private_key: Option<String>,
+}
+
+struct NormalizedPrivilege {
+    enabled: bool,
+    sudo_user: String,
+    sudo_password: Option<String>,
+    sudo_password_ref: Option<String>,
+    su_user: String,
+    su_password: Option<String>,
+    su_password_ref: Option<String>,
+}
+
 fn normalize_entry(entry: RawConnection, index: usize) -> AppResult<Connection> {
-    let name = entry
-        .name
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            AppError::new(format!(
-                "ssh-config.json 第 {} 项缺少合法的 name",
-                index + 1
-            ))
-        })?;
-    let host = entry
-        .host
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            AppError::new(format!(
-                "ssh-config.json 第 {} 项缺少合法的 host",
-                index + 1
-            ))
-        })?;
-    let username = entry
-        .username
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            AppError::new(format!(
-                "ssh-config.json 第 {} 项缺少合法的 username",
-                index + 1
-            ))
-        })?;
+    let endpoint = normalize_endpoint(&entry, index)?;
+    let auth = normalize_auth(&entry, index)?;
+    validate_optional_refs(&entry, index, &endpoint.name)?;
+    let privilege = normalize_privilege(&entry, index)?;
+    let _ = ensure_string_array(entry.allowed_local_paths, "allowedLocalPaths", index)?;
+    Ok(Connection {
+        name: endpoint.name,
+        host: endpoint.host,
+        port: endpoint.port,
+        username: endpoint.username,
+        password: auth.password,
+        password_ref: auth.password_ref,
+        private_key: auth.private_key,
+        passphrase: entry.passphrase,
+        socks_proxy: entry.socks_proxy,
+        jump_host: entry.jump_host,
+        pty: entry.pty,
+        privilege_enabled: privilege.enabled,
+        sudo_user: privilege.sudo_user,
+        sudo_password: privilege.sudo_password,
+        sudo_password_ref: privilege.sudo_password_ref,
+        su_user: privilege.su_user,
+        su_password: privilege.su_password,
+        su_password_ref: privilege.su_password_ref,
+        command_whitelist: ensure_regex_array(entry.command_whitelist, "commandWhitelist", index)?,
+        command_blacklist: ensure_regex_array(entry.command_blacklist, "commandBlacklist", index)?,
+    })
+}
+
+fn normalize_endpoint(entry: &RawConnection, index: usize) -> AppResult<NormalizedEndpoint> {
+    let required = |value: &Option<String>, field: &str| -> AppResult<String> {
+        value
+            .clone()
+            .filter(|item| !item.trim().is_empty())
+            .ok_or_else(|| {
+                AppError::new(format!(
+                    "ssh-config.json 第 {} 项缺少合法的 {}",
+                    index + 1,
+                    field
+                ))
+            })
+    };
     let port = entry.port.unwrap_or(22);
     if port == 0 {
         return Err(AppError::new(format!(
@@ -244,6 +284,15 @@ fn normalize_entry(entry: RawConnection, index: usize) -> AppResult<Connection> 
             index + 1
         )));
     }
+    Ok(NormalizedEndpoint {
+        name: required(&entry.name, "name")?,
+        host: required(&entry.host, "host")?,
+        port,
+        username: required(&entry.username, "username")?,
+    })
+}
+
+fn normalize_auth(entry: &RawConnection, index: usize) -> AppResult<NormalizedAuth> {
     let has_password = is_non_empty(&entry.password);
     let has_password_ref = is_non_empty(&entry.password_ref);
     let has_private_key = is_non_empty(&entry.private_key);
@@ -273,35 +322,26 @@ fn normalize_entry(entry: RawConnection, index: usize) -> AppResult<Connection> 
             index + 1
         )));
     }
-    if entry
-        .passphrase
-        .as_ref()
-        .is_some_and(|value| value.trim().is_empty())
-    {
-        return Err(AppError::new(format!(
-            "ssh-config.json 第 {} 项的 passphrase 必须是非空字符串",
-            index + 1
-        )));
-    }
-    if entry
-        .socks_proxy
-        .as_ref()
-        .is_some_and(|value| value.trim().is_empty())
-    {
-        return Err(AppError::new(format!(
-            "ssh-config.json 第 {} 项的 socksProxy 必须是非空字符串",
-            index + 1
-        )));
-    }
-    if entry
-        .jump_host
-        .as_ref()
-        .is_some_and(|value| value.trim().is_empty())
-    {
-        return Err(AppError::new(format!(
-            "ssh-config.json 第 {} 项的 jumpHost 必须是非空字符串",
-            index + 1
-        )));
+    Ok(NormalizedAuth {
+        password: entry.password.clone().filter(|_| has_password),
+        password_ref: entry.password_ref.clone().filter(|_| has_password_ref),
+        private_key: entry.private_key.clone().filter(|_| has_private_key),
+    })
+}
+
+fn validate_optional_refs(entry: &RawConnection, index: usize, name: &str) -> AppResult<()> {
+    for (value, field_name) in [
+        (&entry.passphrase, "passphrase"),
+        (&entry.socks_proxy, "socksProxy"),
+        (&entry.jump_host, "jumpHost"),
+    ] {
+        if value.as_ref().is_some_and(|item| item.trim().is_empty()) {
+            return Err(AppError::new(format!(
+                "ssh-config.json 第 {} 项的 {} 必须是非空字符串",
+                index + 1,
+                field_name
+            )));
+        }
     }
     if matches!(
         entry.jump_host.as_deref().map(str::trim),
@@ -324,30 +364,23 @@ fn normalize_entry(entry: RawConnection, index: usize) -> AppResult<Connection> 
             )));
         }
     }
-    let sudo_user = normalize_privilege_user(entry.sudo_user, "root", "sudoUser", index)?;
-    let su_user = normalize_privilege_user(entry.su_user, "root", "suUser", index)?;
-    let _ = ensure_string_array(entry.allowed_local_paths, "allowedLocalPaths", index)?;
-    Ok(Connection {
-        name,
-        host,
-        port,
-        username,
-        password: entry.password.filter(|_| has_password),
-        password_ref: entry.password_ref.filter(|_| has_password_ref),
-        private_key: entry.private_key.filter(|_| has_private_key),
-        passphrase: entry.passphrase,
-        socks_proxy: entry.socks_proxy,
-        jump_host: entry.jump_host,
-        pty: entry.pty,
-        privilege_enabled: entry.privilege_enabled.unwrap_or(false),
-        sudo_user,
-        sudo_password: entry.sudo_password.filter(|value| !value.trim().is_empty()),
-        sudo_password_ref: entry.sudo_password_ref,
-        su_user,
-        su_password: entry.su_password.filter(|value| !value.trim().is_empty()),
-        su_password_ref: entry.su_password_ref,
-        command_whitelist: ensure_regex_array(entry.command_whitelist, "commandWhitelist", index)?,
-        command_blacklist: ensure_regex_array(entry.command_blacklist, "commandBlacklist", index)?,
+    Ok(())
+}
+
+fn normalize_privilege(entry: &RawConnection, index: usize) -> AppResult<NormalizedPrivilege> {
+    let non_blank = |value: &Option<String>| {
+        value
+            .clone()
+            .filter(|item| !item.trim().is_empty())
+    };
+    Ok(NormalizedPrivilege {
+        enabled: entry.privilege_enabled.unwrap_or(false),
+        sudo_user: normalize_privilege_user(entry.sudo_user.clone(), "root", "sudoUser", index)?,
+        sudo_password: non_blank(&entry.sudo_password),
+        sudo_password_ref: entry.sudo_password_ref.clone(),
+        su_user: normalize_privilege_user(entry.su_user.clone(), "root", "suUser", index)?,
+        su_password: non_blank(&entry.su_password),
+        su_password_ref: entry.su_password_ref.clone(),
     })
 }
 
