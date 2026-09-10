@@ -39,10 +39,10 @@ agent-ssh-cli 项目说明与发布流程，供 AI agent 与维护者使用。
    git push origin main --tags
    ```
 
-4. **等待 GitHub Action 发布完成**（`publish.yml`，两阶段）：
+4. **等待 GitHub Action 发布完成**（`publish.yml`，三阶段）：
    - 阶段一 `build-platform`：矩阵构建 5 个平台并上传 artifact，不接触 registry
-   - 阶段二 `publish-platform` → `publish-main` → `create-release`：**全部平台构建成功后才开始发布**，任一平台编译失败则一个包都不发布
-   - 平台包发布前会恢复二进制可执行位（artifact 往返不保留文件权限，原因见「注意事项」）
+   - 阶段二 `publish-platform` → `publish-main`：**全部平台构建成功后才开始发布**，任一平台编译失败则一个包都不发布；平台包发布前会恢复二进制可执行位（artifact 往返不保留文件权限，原因见「注意事项」）
+   - 阶段三 `verify-packages` → `create-release`：轮询 6 个包（主包 + 5 平台包）的 tarball 可下载性并校验非 win32 平台包的可执行位；npm 对含二进制的包有异步处理，tarball 可能延迟数分钟才可下载；自检未通过则整次发布判失败、不创建 Release
    - 矩阵覆盖：darwin-arm64/x64、linux-arm64/x64、win32-x64
    - 创建 GitHub Release：notes 从仓库内 `RELEASE_NOTES.md` 自动提取当前版本章节，无需二次编辑
    - 检查：`gh run list`；确认：`npm view agent-ssh-cli@X.Y.Z version`；确认 notes：`gh release view vX.Y.Z`
@@ -65,6 +65,7 @@ agent-ssh-cli 项目说明与发布流程，供 AI agent 与维护者使用。
 ## 注意事项
 
 - **发布产物要自证可用**：`actions/upload-artifact` / `download-artifact` 不保留文件权限，平台包二进制经 artifact 往返会变成 `0644`，因此 `publish-platform` 里发布前有显式 `chmod +x`，改动发布流程时不要删掉（v0.5.5 曾因缺可执行位导致 macOS/Linux 安装后 `EACCES`，已发布的包无法覆盖，只能发 v0.5.6 补救）。
+- 发布自检由 `verify-packages` 完成：tarball 不可下载或平台包缺可执行位都会让整次发布失败（本地可用同样的 shell 逻辑对已发布版本复核）。
 - 非 tag 触发（`workflow_dispatch`）只跑构建阶段，用于验证构建链路，不会写入 registry；发布类 job 由 `if: startsWith(github.ref, 'refs/tags/v')` 守住。
 - 平台包与主包发布均由 GitHub Action 完成，**不要在本地手动 `npm publish`**（本地 npm 无发布权限，且 Action 会处理 5 平台矩阵）。
 - 轻量 tag 即可：`publish.yml` 的 create-release 直接从 `RELEASE_NOTES.md` 提取 notes，不依赖 tag message。

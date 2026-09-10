@@ -148,8 +148,58 @@ jobs:
               exit 1
             fi
 
+  verify-packages:
+    # 发布后自检：npm 对含二进制的包有异步处理，tarball 可能延迟数分钟才可下载；
+    # 同时复核非 win32 平台包的可执行位，避免再发出不可运行的包（v0.5.5 教训）。
+    # 任一包在超时内不可下载或权限异常，则整次发布判失败，不创建 GitHub Release。
+    needs: [publish-platform, publish-main]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install -g npm@11.5.1
+      - name: Verify published packages
+        shell: bash
+        run: |
+          set -uo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          ATTEMPTS=12
+          INTERVAL=30
+          failed=0
+
+          check_package() {
+            local package="$1" expect_exec="$2" attempt tarball mode
+            for attempt in $(seq 1 "$ATTEMPTS"); do
+              tarball=$(npm view "${package}@${VERSION}" dist.tarball 2>/dev/null || true)
+              if [ -n "$tarball" ] && curl -fsSL "$tarball" -o /tmp/verify.tgz 2>/dev/null; then
+                if [ "$expect_exec" = "yes" ]; then
+                  mode=$(tar -tzvf /tmp/verify.tgz | awk '/bin\/agentsshcli-native$/ {print substr($1,1,10); exit}')
+                  if [ "$mode" != "-rwxr-xr-x" ]; then
+                    echo "${package}@${VERSION} 二进制权限异常: ${mode:-未找到可执行文件}"
+                    return 1
+                  fi
+                fi
+                echo "${package}@${VERSION} 可用$([ "$expect_exec" = "yes" ] && echo "（可执行位已校验）")"
+                return 0
+              fi
+              echo "${package}@${VERSION} 尚未就绪（第 ${attempt}/${ATTEMPTS} 次），${INTERVAL}s 后重试"
+              sleep "$INTERVAL"
+            done
+            echo "${package}@${VERSION} 在 $((ATTEMPTS * INTERVAL))s 内不可下载"
+            return 1
+          }
+
+          check_package "agent-ssh-cli" "no" || failed=1
+          for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
+            check_package "@agent-ssh-cli/${platform}" "yes" || failed=1
+          done
+          check_package "@agent-ssh-cli/win32-x64" "no" || failed=1
+          exit "$failed"
+
   create-release:
-    needs: publish-main
+    needs: verify-packages
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
