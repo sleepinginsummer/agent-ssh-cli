@@ -1,5 +1,22 @@
 # Release Notes
 
+## v0.5.5
+
+原生程序按职责完成模块化拆分，并补上平台分支守卫；命令行为与 v0.5.4 一致。
+
+- `native/src/main.rs` 由 2232 行收敛到 74 行：新增 `config.rs`（连接配置读写校验、secret 密钥库、凭据迁移、配置快照、命令黑白名单）与 `cli.rs`（参数结构体、help、解析与子命令调度），入口只保留模块声明、错误类型、输出模式与 `main()`。
+- 模块依赖单向化且无环：`cli → config / daemon / exec / transfer`；daemon 不再认识 CLI 解析层类型，改由 `DaemonExecRequest` / `DaemonTransferRequest` / `DaemonClientConfig` 接收请求，CLI 负责映射。
+- 可见性收窄：`config.rs` 只放行跨模块真实入口（`Connection` 及其必需字段、`ConfigSnapshot` 与加载/凭据/路径/策略 API），`normalize_entry`、secret DTO、加解密与迁移等内部实现恢复私有；`cli.rs` 仅 `run` 对外；删除 4 处 `allow(unused_imports)`。
+- 测试按职责归位：配置/凭据用例移入 `config.rs`，参数解析与 command-file 用例移入 `cli.rs`，daemon/privilege 用例保持原位，共 41 项。
+- `normalize_entry` 由 141 行拆为 29 行，配合 `normalize_endpoint` / `normalize_auth` / `validate_optional_refs` / `normalize_privilege`，校验顺序与错误文案不变。
+- 新增 `scripts/check-cfg-ports.js` 并接入 `npm test`：静态拦截只在 win32 暴露的三类问题（cfg 变体可见性不一致、跨模块引用私有项、`#[cfg]` 孤儿属性贴在平台无关 std import 上）。
+
+验证：
+
+- `npm test` 通过：平台分支检查 + 41 项测试。
+- `cargo clippy` 0 error，警告 6 项（均为既有风格项）。
+- 真机冒烟：`list`、直连 exec、`--pty`、`--sudo`、`--su`（CentOS 7 管道路径）、`--su`（util-linux 2.32 `-P` 路径）、跳板机、upload、`download` 命名参数、daemon exec/download、`stop-daemon` 全部通过。
+- CI 演练（`workflow_dispatch`，run 34479799594）：5 个平台构建全绿（含 win32-x64），发布阶段按 guard 跳过、未写入 registry。
 ## v0.5.4
 
 修复 `download` 命名参数倒置，把原生程序按职责拆分为模块，并修复拆分引入的 Windows 构建失败：
