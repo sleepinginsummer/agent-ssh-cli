@@ -24,7 +24,8 @@
     "build:native": "cargo build --release --manifest-path native/Cargo.toml",
     "test:native": "cargo test --manifest-path native/Cargo.toml",
     "build:native-bin": "node scripts/build-native-bin.js",
-    "build:native-package": "npm run build:native-bin && node scripts/build-native-package.js"
+    "build:native-package": "npm run build:native-bin && node scripts/build-native-package.js",
+    "verify:published": "bash scripts/verify-published-packages.sh"
   },
   "optionalDependencies": {
     "@agent-ssh-cli/darwin-arm64": "0.5.7",
