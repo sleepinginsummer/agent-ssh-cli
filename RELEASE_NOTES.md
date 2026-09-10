@@ -1,5 +1,21 @@
 # Release Notes
 
+## v0.5.3
+
+修复 `download` 命名参数倒置，并把原生程序按职责拆分为模块：
+
+- 修复 `download --remote <path> --local <path>` 把两个路径互换的问题：`parse_transfer_args` 在 download 分支先按 upload 语义取值再按变量名解释，导致远端 stat 打到本地路径上，命名参数形式必然报「读取远端文件信息失败: No such file」。
+- 重构为 `TransferMode` 枚举：`--local`/`--remote` 始终解析到同名字段，两个子命令的差异只体现在位置参数顺序（upload 为 local → remote，download 为 remote → local），并补充命名参数语义的回归测试。
+- `native/src/main.rs` 由 4539 行拆分到 2232 行：新增 `daemon.rs`（协议/进程生命周期/连接池/请求分发）、`transfer.rs`（SFTP 传输）、`ssh.rs`（建连与认证）、`exec.rs`（命令执行与提权编排）、`runtime.rs`（runtime/超时封装）；`privilege.rs` 保持纯逻辑不变。
+- `handle_daemon_stream` 由约 200 行拆为 33 行路由，配合 `prepare_daemon_request`、`acquire_pool_entry`、`dispatch_daemon_operation`、`handle_daemon_upload`、`handle_daemon_download`，行为保持不变。
+- 模块依赖单向化：`exec`/`transfer` 直接依赖 `ssh`、`runtime` 与根级共享类型，不再经由入口模块的私有导入别名。
+
+验证：
+
+- `npm test` 通过，共 41 项测试（新增 download 命名参数回归用例）。
+- `cargo clippy` 0 error；警告 8 → 6，均为既有风格项。
+- 真机冒烟：`list`、直连 exec、`--pty`、`--sudo`、`--su`（CentOS 7 管道路径）、`--su`（util-linux 2.32 `-P` 路径）、跳板机、daemon execute/upload/download（含目录递归）、非缓存 exec/upload/download，全部返回预期结果且内容比对一致。
+- `download` 命名与位置参数两种形式、daemon 与非缓存两条路径均通过。
 ## v0.5.2
 
 修复 CentOS 7 等旧 su 环境下 `--su` 无法提权（或静默假成功）的问题：
