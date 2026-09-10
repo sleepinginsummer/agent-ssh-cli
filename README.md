@@ -64,6 +64,7 @@
 - `exec --timeout <ms>`: 单次命令超时，默认 `30000`
 - `upload` / `download --timeout <ms>`: 传输总超时，默认不限制（大文件允许长时间运行）
 - `upload` / `download --recursive`: 递归传输目录，保持相对路径；符号链接不跟随，指向目录的链接跳过、指向文件的链接上传其内容
+- `upload` 单文件上传不创建远端目录：目标目录不存在（或同名路径是文件）时报「远端目录不存在或不可访问」，请先创建目录，或改用 `--recursive` 上传整个目录
 - 下载支持断点续传：中断后本地保留 `.part` 文件，下次自动从断点继续
 - `exec` / `upload` / `download --json`: 输出结构化 JSON（`exitCode`/`stdout`/`stderr`），`exitCode` 为远端命令真实退出码，便于脚本和 AI 解析
 - `agentsshcli init-config`: 生成默认配置文件到 `~/.agent-ssh-cli/config.json`

@@ -356,6 +356,7 @@ agentsshcli upload --no-cache --connection "<connectionName>" --local "./tmp/upl
 
 - 成功时 stdout 输出 `File uploaded successfully`
 - 退出码为 `0`
+- 单文件上传不会创建远端目录：目标目录不存在（或同名路径是文件）时直接报 `远端目录不存在或不可访问: <dir>`，需先创建目录，或改用 `--recursive` 上传整个目录（递归模式会自动建目录）
 - 本地文件不存在、远端写入失败或连接失败时，stderr 输出错误信息，退出码为 `1`
 - `--json` 模式下成功时 stdout 为 `{"exitCode":0,"stdout":"File uploaded successfully","stderr":""}`，失败时 `exitCode` 为 `1`
 

@@ -57,6 +57,37 @@ async fn open_sftp_session(
         })
 }
 
+// 取远端路径的父目录；路径不含目录分隔符时返回 None（等价于 SFTP 会话当前工作目录，无需检查）。
+fn remote_parent_path(remote_path: &str) -> Option<String> {
+    let trimmed = remote_path.trim_end_matches('/');
+    let index = trimmed.rfind('/')?;
+    if index == 0 {
+        return Some("/".to_string());
+    }
+    Some(trimmed[..index].to_string())
+}
+
+// 单文件上传前确认父目录可用：远端目录不存在时会报“创建远端续传元数据失败: No such file”，
+// 指向性差且会白白重试 3 次，这里提前失败并给出可操作提示。
+async fn ensure_remote_parent_dir(sftp: &SftpSession, remote_path: &str) -> AppResult<()> {
+    let Some(parent) = remote_parent_path(remote_path) else {
+        return Ok(());
+    };
+    // metadata 成功不等于父路径就是目录（同名文件会挡住），必须显式判断类型。
+    let parent_is_dir = sftp
+        .metadata(parent.clone())
+        .await
+        .map(|meta| meta.is_dir())
+        .unwrap_or(false);
+    if parent_is_dir {
+        return Ok(());
+    }
+    Err(AppError::new(format!(
+        "远端目录不存在或不可访问: {}（单文件上传不会自动创建目录，请先创建该目录，或改用 --recursive 上传整个目录）",
+        parent
+    )))
+}
+
 fn temporary_remote_path(remote_path: &str) -> String {
     format!("{}.part", remote_path)
 }
@@ -95,6 +126,14 @@ pub(crate) async fn upload_file_with_session_async(
     // SFTP 传输不再设置总超时：大文件允许长时间运行，失败时按整次上传重试。
     for attempt in 1..=TRANSFER_MAX_RETRIES {
         let sftp = open_sftp_session(session, connection).await?;
+        if attempt == 1 {
+            // 父目录缺失属确定性失败（单文件上传不会自动创建目录），
+            // 复用本次会话提前失败：既给出可操作报错，也不额外开 SFTP subsystem、不做无谓重试。
+            if let Err(error) = ensure_remote_parent_dir(&sftp, remote_path).await {
+                let _ = sftp.close().await;
+                return Err(error);
+            }
+        }
         let upload_result = upload_file_once(
             &sftp,
             connection,
@@ -716,5 +755,22 @@ pub(crate) fn download_dir(
                 local_dir,
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_parent_path_handles_absolute_relative_and_root() {
+        assert_eq!(remote_parent_path("/tmp/a/b.txt").as_deref(), Some("/tmp/a"));
+        assert_eq!(remote_parent_path("a/b.txt").as_deref(), Some("a"));
+        assert_eq!(remote_parent_path("/b.txt").as_deref(), Some("/"));
+        // 不含目录部分：等价于会话当前目录，不需要父目录检查
+        assert_eq!(remote_parent_path("b.txt"), None);
+        assert_eq!(remote_parent_path("dir/"), None);
+        // 尾部斜杠先被裁掉："/tmp/dir/" 视作目录 "/tmp/dir"，其父目录是 "/tmp"
+        assert_eq!(remote_parent_path("/tmp/dir/").as_deref(), Some("/tmp"));
     }
 }
