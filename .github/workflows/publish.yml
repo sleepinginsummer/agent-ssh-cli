@@ -1,5 +1,10 @@
 name: publish
 
+# 两阶段发布：先由矩阵任务在 5 个平台完成构建并上传 artifact，
+# 全部平台构建成功后才进入发布阶段，避免任一平台编译失败时在 npm 上留下
+# 无法覆盖的孤儿平台包（v0.5.3 曾因此整次发布作废）。
+# 非 tag 触发（workflow_dispatch）只跑构建阶段，用于验证构建链路，不会写入 registry。
+
 on:
   workflow_dispatch:
   push:
@@ -11,7 +16,7 @@ permissions:
   id-token: write
 
 jobs:
-  publish-platform:
+  build-platform:
     strategy:
       fail-fast: false
       matrix:
@@ -37,7 +42,7 @@ jobs:
             platform: win32
             arch: x64
     runs-on: ${{ matrix.os }}
-    environment: npm
+    # 构建阶段不接触 registry，因此不挂 npm environment / 发布凭据。
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -61,6 +66,46 @@ jobs:
         env:
           npm_config_platform: ${{ matrix.platform }}
           npm_config_arch: ${{ matrix.arch }}
+      - name: Upload platform package
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-package-${{ matrix.platform }}-${{ matrix.arch }}
+          path: npm/${{ matrix.platform }}-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-platform:
+    # 需要全部平台构建成功；任一平台编译失败则一个包都不会发布。
+    needs: build-platform
+    # 仅 tag 触发时发布，workflow_dispatch 只做构建演练。
+    if: startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin
+            arch: arm64
+          - platform: darwin
+            arch: x64
+          - platform: linux
+            arch: x64
+          - platform: linux
+            arch: arm64
+          - platform: win32
+            arch: x64
+    runs-on: ubuntu-24.04
+    environment: npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install -g npm@11.5.1
+      - name: Download platform package
+        uses: actions/download-artifact@v4
+        with:
+          name: platform-package-${{ matrix.platform }}-${{ matrix.arch }}
+          path: npm/${{ matrix.platform }}-${{ matrix.arch }}
       - name: Publish platform package
         shell: bash
         working-directory: npm/${{ matrix.platform }}-${{ matrix.arch }}
@@ -76,6 +121,7 @@ jobs:
 
   publish-main:
     needs: publish-platform
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     environment: npm
     steps:
@@ -98,6 +144,7 @@ jobs:
 
   create-release:
     needs: publish-main
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
