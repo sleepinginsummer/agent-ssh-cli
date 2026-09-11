@@ -7,6 +7,11 @@ name: publish
 
 on:
   workflow_dispatch:
+    inputs:
+      verify_version:
+        description: '仅运行发布自检：校验指定已发布版本（如 0.5.7），不发布任何包'
+        required: false
+# 说明：不带 verify_version 的 dispatch 只跑构建阶段；带 verify_version 时只跑自检 job。
   push:
     tags:
       - 'v*'
@@ -42,7 +47,8 @@ jobs:
             platform: win32
             arch: x64
     runs-on: ${{ matrix.os }}
-    # 构建阶段不接触 registry，因此不挂 npm environment / 发布凭据。
+    # 仅自检模式不需要构建；构建阶段也不接触 registry，因此不挂 npm environment / 发布凭据。
+    if: ${{ !inputs.verify_version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -156,7 +162,8 @@ jobs:
     # 同时复核非 win32 平台包的可执行位，避免再发出不可运行的包（v0.5.5 教训）。
     # 任一包在超时内不可下载或权限异常，则整次发布判失败，不创建 GitHub Release。
     needs: [publish-platform, publish-main]
-    if: startsWith(github.ref, 'refs/tags/v')
+    # tag 发布时要求两个发布 job 都成功；dispatch 带 verify_version 时仅做自检。
+    if: ${{ always() && (needs.publish-platform.result == 'success' && needs.publish-main.result == 'success' || inputs.verify_version) }}
     runs-on: ubuntu-24.04
     steps:
       # 校验逻辑集中在脚本里，本地可用同一文件复核（见 AGENTS.md「注意事项」）。
@@ -167,7 +174,13 @@ jobs:
       - run: npm install -g npm@11.5.1
       - name: Verify published packages
         shell: bash
-        run: bash scripts/verify-published-packages.sh "${GITHUB_REF_NAME#v}"
+        run: |
+          VERSION="${{ inputs.verify_version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "校验版本: ${VERSION}"
+          bash scripts/verify-published-packages.sh "$VERSION"
 
   create-release:
     needs: verify-packages

@@ -66,7 +66,7 @@ agent-ssh-cli 项目说明与发布流程，供 AI agent 与维护者使用。
 
 - **发布产物要自证可用**：`actions/upload-artifact` / `download-artifact` 不保留文件权限，平台包二进制经 artifact 往返会变成 `0644`，因此 `publish-platform` 里发布前有显式 `chmod +x`，改动发布流程时不要删掉（v0.5.5 曾因缺可执行位导致 macOS/Linux 安装后 `EACCES`，已发布的包无法覆盖，只能发 v0.5.6 补救）。
 - 发布自检由 `scripts/verify-published-packages.sh` 完成（CI 与本地同一份脚本）：tarball 不可下载或平台包缺可执行位都会让整次发布失败；本地复核用 `npm run verify:published -- 0.5.7`（可加次数与间隔参数做快速核对）。
-- 非 tag 触发（`workflow_dispatch`）只跑构建阶段，用于验证构建链路，不会写入 registry；发布类 job 由 `if: startsWith(github.ref, 'refs/tags/v')` 守住。
+- 非 tag 触发（`workflow_dispatch`）不会写入 registry：不带参数的 dispatch 只跑构建阶段（验证构建链路），带 `verify_version` 的 dispatch 只跑 `verify-packages`（例如 `gh workflow run publish.yml --ref main -f verify_version=0.5.7`，用于复核任意已发布版本）。
 - 平台包与主包发布均由 GitHub Action 完成，**不要在本地手动 `npm publish`**（本地 npm 无发布权限，且 Action 会处理 5 平台矩阵）。
 - 轻量 tag 即可：`publish.yml` 的 create-release 直接从 `RELEASE_NOTES.md` 提取 notes，不依赖 tag message。
 - 版本号更新后需重新 `npm run build:native` 才能在本地验证 `--version`。
