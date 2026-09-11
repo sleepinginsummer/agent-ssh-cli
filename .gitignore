@@ -10,6 +10,5 @@ native-bin/
 npm/*/bin/
 npm/*/package.json
 npm/*/*.tgz
-task.md
 
 .DS_Store
