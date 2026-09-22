@@ -11,6 +11,7 @@ use crate::daemon::{
     request_daemon_execute, request_daemon_transfer, request_stop_daemon, run_daemon,
     DaemonClientConfig, DaemonExecRequest, DaemonTransferOperation, DaemonTransferRequest,
 };
+use crate::editor::{run_editor_service_args, start_editor, stop_editor};
 use crate::exec::{command_with_directory, execute_remote_command, ExecOutput};
 use crate::privilege::PrivilegeMode;
 use crate::transfer::{download_dir, download_file, upload_dir, upload_file};
@@ -41,8 +42,10 @@ const HELP_AGENTSSHCLI: &str = r#"
   agentsshcli download [--config <path>] [--no-cache] [--cache-ttl <ms>] <connectionName> <remotePath> <localPath>
   agentsshcli download [--config <path>] [--no-cache] [--cache-ttl <ms>] --connection <name> --remote <path> --local <path>
   agentsshcli init-config
+  agentsshcli edit-config [--config <path>]
+  agentsshcli stop-editor [--config <path>]
   agentsshcli stop-daemon [--config <path>]
-  agentsshcli help [list|exec|upload|download|stop-daemon]
+  agentsshcli help [list|exec|upload|download|edit-config|stop-editor|stop-daemon]
   agentsshcli --help
   agentsshcli --version
 
@@ -109,6 +112,16 @@ const HELP_STOP_DAEMON: &str = r#"
   停止当前配置文件对应的 SSH 缓存进程。这是连接池维护命令，不用于精确取消单个上传任务。
 "#;
 
+const HELP_EDIT_CONFIG: &str = r#"
+用法:
+  agentsshcli edit-config [--config <path>]
+  agentsshcli stop-editor [--config <path>]
+  agentsshcli help edit-config
+
+说明:
+  在本机回环地址启动配置编辑器并打开浏览器；stop-editor 停止对应配置文件的编辑器服务。
+"#;
+
 #[derive(Debug)]
 struct GlobalArgs {
     config_path: PathBuf,
@@ -165,8 +178,11 @@ pub(crate) fn run(argv: Vec<String>) -> AppResult<()> {
         "exec" => run_exec(args.to_vec()),
         "upload" => run_upload(args.to_vec()),
         "download" => run_download(args.to_vec()),
+        "edit-config" => run_edit_config(args.to_vec()),
+        "stop-editor" => run_stop_editor(args.to_vec()),
         "stop-daemon" => run_stop_daemon(args.to_vec()),
         "__daemon" => run_daemon(args.to_vec()),
+        "__editor" => run_editor_service_args(args.to_vec()),
         _ => Err(AppError::new(format!(
             "未知命令: {}，使用 agentsshcli --help 查看说明",
             command
@@ -186,6 +202,7 @@ fn print_help(name: &str) -> AppResult<()> {
         "exec" | "sshx" => HELP_EXEC,
         "upload" | "sshupload" => HELP_UPLOAD,
         "download" | "sshdownload" => HELP_DOWNLOAD,
+        "edit-config" | "stop-editor" => HELP_EDIT_CONFIG,
         "stop-daemon" => HELP_STOP_DAEMON,
         _ => return Err(AppError::new(format!("未知帮助命令: {}", name))),
     };
@@ -517,7 +534,10 @@ fn parse_transfer_args(argv: Vec<String>, mode: TransferMode) -> AppResult<Trans
         return Err(AppError::new("缺少必填参数，使用 --help 查看说明"));
     };
     let timeout_ms = match timeout_value {
-        Some(value) => Some(normalize_positive_u64(&value, "timeout 必须是正整数毫秒值")?),
+        Some(value) => Some(normalize_positive_u64(
+            &value,
+            "timeout 必须是正整数毫秒值",
+        )?),
         None => None,
     };
     Ok(TransferArgs {
@@ -565,6 +585,46 @@ fn run_list(argv: Vec<String>) -> AppResult<()> {
         .collect();
     println!("{}", serde_json::to_string_pretty(&output)?);
     Ok(())
+}
+
+fn editor_global_args(argv: Vec<String>, command: &str) -> AppResult<GlobalArgs> {
+    let global = parse_global_args(argv)?;
+    if global.no_cache || global.cache_ttl_ms.is_some() {
+        return Err(AppError::new(format!(
+            "agentsshcli {} 不支持 --no-cache 或 --cache-ttl",
+            command
+        )));
+    }
+    if !global.args.is_empty() {
+        return Err(AppError::new(format!(
+            "agentsshcli {} 不接受位置参数: {}",
+            command,
+            global.args.join(" ")
+        )));
+    }
+    Ok(global)
+}
+
+fn run_edit_config(argv: Vec<String>) -> AppResult<()> {
+    let global = editor_global_args(argv, "edit-config")?;
+    if global.help {
+        return print_help("edit-config");
+    }
+    if global.version {
+        return print_version();
+    }
+    start_editor(&global.config_path)
+}
+
+fn run_stop_editor(argv: Vec<String>) -> AppResult<()> {
+    let global = editor_global_args(argv, "stop-editor")?;
+    if global.help {
+        return print_help("stop-editor");
+    }
+    if global.version {
+        return print_version();
+    }
+    stop_editor(&global.config_path)
 }
 
 fn run_stop_daemon(argv: Vec<String>) -> AppResult<()> {
@@ -709,7 +769,10 @@ fn run_upload(argv: Vec<String>) -> AppResult<()> {
         })?;
     }
     if parsed.json_output {
-        println!("{}", serde_json::json!({"exitCode": 0, "stdout": "File uploaded successfully", "stderr": ""}));
+        println!(
+            "{}",
+            serde_json::json!({"exitCode": 0, "stdout": "File uploaded successfully", "stderr": ""})
+        );
     } else {
         println!("File uploaded successfully");
     }
@@ -762,7 +825,10 @@ fn run_download(argv: Vec<String>) -> AppResult<()> {
         })?;
     }
     if parsed.json_output {
-        println!("{}", serde_json::json!({"exitCode": 0, "stdout": "File downloaded successfully", "stderr": ""}));
+        println!(
+            "{}",
+            serde_json::json!({"exitCode": 0, "stdout": "File downloaded successfully", "stderr": ""})
+        );
     } else {
         println!("File downloaded successfully");
     }
@@ -785,12 +851,10 @@ fn resolve_execute_command(_configs: &[Connection], parsed: &ExecuteArgs) -> App
     })
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
-
 
     #[test]
     fn parse_exec_allows_cache_mode() {
@@ -839,12 +903,8 @@ mod tests {
 
     #[test]
     fn parse_exec_supports_json_flag() {
-        let parsed = parse_execute_args(vec![
-            "--json".into(),
-            "server".into(),
-            "pwd".into(),
-        ])
-        .unwrap();
+        let parsed =
+            parse_execute_args(vec!["--json".into(), "server".into(), "pwd".into()]).unwrap();
         assert!(parsed.json_output);
     }
 
@@ -867,12 +927,8 @@ mod tests {
     #[test]
     fn parse_global_flag_after_positional_rejected() {
         // 位置参数之后的全局 flag 不被吞掉，明确报错（避免误吞命令内容）。
-        let err = parse_execute_args(vec![
-            "server".into(),
-            "pwd".into(),
-            "--no-cache".into(),
-        ])
-        .unwrap_err();
+        let err = parse_execute_args(vec!["server".into(), "pwd".into(), "--no-cache".into()])
+            .unwrap_err();
         assert!(err.to_string().contains("不支持的参数: --no-cache"));
     }
 
@@ -887,12 +943,8 @@ mod tests {
     #[test]
     fn parse_exec_rejects_flag_after_positional() {
         // 位置参数（连接名/命令）之后的 flag 不再被静默吞掉，而是明确报错。
-        let err = parse_execute_args(vec![
-            "server".into(),
-            "pwd".into(),
-            "--json".into(),
-        ])
-        .unwrap_err();
+        let err =
+            parse_execute_args(vec!["server".into(), "pwd".into(), "--json".into()]).unwrap_err();
         assert!(err.to_string().contains("不支持的参数: --json"));
     }
 
@@ -957,11 +1009,7 @@ mod tests {
     fn parse_download_positional_order_remote_then_local() {
         // download 位置参数语义为 <connectionName> <remotePath> <localPath>。
         let parsed = parse_transfer_args(
-            vec![
-                "server".into(),
-                "/remote/file".into(),
-                "/local/file".into(),
-            ],
+            vec!["server".into(), "/remote/file".into(), "/local/file".into()],
             TransferMode::Download,
         )
         .unwrap();
@@ -1113,5 +1161,14 @@ mod tests {
         let command = resolve_execute_command(&[], &parsed).unwrap();
         env::set_current_dir(original_dir).unwrap();
         assert_eq!(command, "echo start\necho end\n");
+    }
+
+    #[test]
+    fn editor_args_reject_daemon_cache_flags_and_positionals() {
+        let cache_error = editor_global_args(vec!["--no-cache".into()], "edit-config").unwrap_err();
+        assert!(cache_error.to_string().contains("不支持 --no-cache"));
+
+        let positional_error = editor_global_args(vec!["extra".into()], "edit-config").unwrap_err();
+        assert!(positional_error.to_string().contains("不接受位置参数"));
     }
 }

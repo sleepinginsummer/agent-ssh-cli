@@ -1,0 +1,1252 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CONFIG / agent-ssh-cli</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --paper: #101722; --surface: #141e2b; --surface-muted: #182432; --surface-hover: #1c2a39;
+      --ink: #eef5fa; --ink-2: #d6e1e9; --muted: #8395a6; --muted-strong: #a8b7c4;
+      --line: rgba(202, 226, 242, .12); --line-dark: #34475a;
+      --accent: #ffad55; --accent-soft: rgba(255, 173, 85, .12); --signal: #49d4e7;
+      --danger: #ff6875; --danger-soft: rgba(255, 104, 117, .12);
+      --code: #111925; --code-2: #151f2c; --code-text: #d9e5ed; --radius: 8px;
+      --ease-spring: cubic-bezier(.2, .8, .2, 1); --ease-out: cubic-bezier(.16, 1, .3, 1);
+      --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+      --font-display: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+      --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { height: 100%; }
+    body { margin: 0; min-width: 320px; overflow: hidden; background: var(--paper); color: var(--ink); font: 14px/1.45 var(--font-ui); }
+    button, input, select, textarea { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: .45; }
+    svg { fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    ::selection { background: var(--accent); color: #111925; }
+    .skip-link { position: fixed; top: -60px; left: 10px; z-index: 100; padding: 9px 12px; border-radius: var(--radius); background: var(--accent); color: #111925; font-weight: 750; }
+    .skip-link:focus { top: 10px; }
+
+    .app { display: grid; grid-template-rows: 54px minmax(0, 1fr) 60px; height: 100dvh; min-height: 640px; }
+    .topbar { display: grid; grid-template-columns: 260px minmax(0, 1fr) auto; align-items: stretch; border-bottom: 1px solid var(--line); background: var(--surface); }
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 0 18px; border-right: 1px solid var(--line); }
+    .brand-mark { display: grid; width: 20px; height: 20px; place-items: center; color: var(--accent); }
+    .brand-mark .icon { width: 18px; height: 18px; }
+    .brand-copy { display: flex; align-items: baseline; min-width: 0; gap: 12px; }
+    .brand-copy strong { font: 750 14px/1 var(--font-mono); letter-spacing: .2px; white-space: nowrap; }
+    .brand-copy span { color: var(--muted); font: 11px/1 var(--font-mono); }
+    .pathbar { display: flex; align-items: center; min-width: 0; gap: 10px; padding: 0 16px; }
+    .path-index { display: grid; width: 18px; height: 18px; place-items: center; color: var(--accent); }
+    .path-index .icon { width: 14px; height: 14px; }
+    .pathbar code { overflow: hidden; color: var(--muted-strong); font: 11px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+    .top-actions { display: flex; align-items: center; gap: 8px; padding: 0 14px; border-left: 1px solid var(--line); }
+    .top-actions .top-tool { min-height: 34px; padding: 6px 10px; font: 600 10px var(--font-mono); white-space: nowrap; }
+    .top-actions .top-tool.active { border-color: rgba(255, 157, 66, .48); background: var(--accent-soft); color: var(--accent); }
+    .btn, .icon-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; border: 1px solid var(--line-dark); border-radius: var(--radius); background: transparent; color: var(--muted-strong); font-size: 12px; font-weight: 700; transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease, transform 150ms ease; }
+    .btn { padding: 7px 12px; } .icon-btn { width: 36px; padding: 0; }
+    .btn:disabled, .icon-btn:disabled { cursor: not-allowed; opacity: .45; }
+    .btn:hover, .icon-btn:hover { border-color: #536a7e; background: var(--surface-hover); color: var(--ink); }
+    .btn:active, .icon-btn:active { transform: translateY(1px); }
+    .btn.primary { border-color: var(--line-dark); background: var(--surface-hover); color: var(--muted-strong); }
+    .btn.primary.dirty { border-color: var(--accent); background: var(--accent); color: #111925; }
+    .btn.primary:hover { border-color: #536a7e; background: #243343; color: var(--ink); }
+    .btn.primary.dirty:hover { border-color: #ffc071; background: #ffc071; color: #111925; }
+    .btn.danger:hover, .icon-btn.danger:hover { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
+    .icon { width: 16px; height: 16px; stroke-width: 1.8; }
+    .statusbar #save { min-width: 88px; min-height: 38px; margin-left: auto; }
+
+    .workspace { display: grid; grid-template-columns: 260px minmax(600px, 1fr) minmax(380px, 23vw); min-height: 0; overflow: hidden; }
+    .connections { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; overflow: hidden; border-right: 1px solid var(--line); background: var(--surface); }
+    .connections-head { padding: 15px 12px 12px; border-bottom: 1px solid var(--line); }
+    .eyebrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; color: var(--muted); font: 10px var(--font-mono); white-space: nowrap; }
+    .eyebrow strong { color: var(--ink-2); font: 600 11px var(--font-mono); }
+    .search { position: relative; }
+    .search .icon { position: absolute; top: 50%; left: 10px; width: 14px; height: 14px; color: var(--muted); transform: translateY(-50%); pointer-events: none; }
+    .search input { width: 100%; height: 36px; padding: 0 10px 0 33px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); font-size: 12px; }
+    .search input::placeholder { color: #718496; }
+    .search input:focus { border-color: var(--accent); outline: 0; box-shadow: 0 0 0 2px var(--accent-soft); }
+    .connection-list { overflow-y: auto; padding: 7px; scrollbar-color: #4d5c6b transparent; scrollbar-width: thin; }
+    .connection-empty { padding: 28px 12px; color: var(--muted); font-size: 12px; text-align: center; }
+    .connection-item { position: relative; display: grid; width: 100%; grid-template-columns: 10px minmax(0, 1fr) 18px; align-items: center; gap: 11px; min-height: 58px; margin: 0 0 3px; padding: 8px 10px; overflow: hidden; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--muted-strong); text-align: left; opacity: 0; transform: translateX(-6px); animation: connection-enter 220ms var(--ease-out) forwards; animation-delay: calc(var(--order) * 25ms); transition: background-color 150ms ease, color 150ms ease; }
+    .connection-item::before { position: absolute; top: 9px; bottom: 9px; left: 0; width: 2px; border-radius: 2px; background: transparent; content: ""; }
+    .connection-item:hover { background: rgba(255, 255, 255, .025); color: var(--ink); }
+    .connection-item.active { background: var(--surface-hover); color: var(--ink); }
+    .connection-item.active::before { background: var(--accent); }
+    @keyframes connection-enter { to { opacity: 1; transform: translateX(0); } }
+    .connection-index { width: 7px; height: 7px; border-radius: 50%; background: var(--signal); }
+    .connection-index .icon { display: none; }
+    .connection-item.active .connection-index { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .connection-copy { display: grid; min-width: 0; }
+    .connection-copy strong { overflow: hidden; font: 500 12px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+    .connection-copy span { overflow: hidden; margin-top: 4px; color: var(--muted); font: 9px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+    .auth-icon { color: var(--muted); } .connection-item.active .auth-icon { color: var(--accent); } .auth-icon .icon { width: 14px; height: 14px; }
+    .connections-foot { padding: 10px; border-top: 1px solid var(--line); }
+    .connections-foot .btn { width: 100%; border-style: dashed; }
+    .connections-foot .btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    .editor { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; background: var(--paper); }
+    .identity { display: grid; gap: 13px; padding: 17px clamp(24px, 4vw, 48px) 15px; border-bottom: 1px solid var(--line); background: var(--paper); }
+    .identity-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; min-width: 0; }
+    .identity-copy { min-width: 0; }
+    .identity-kicker { margin-bottom: 5px; color: var(--accent); font: 700 9px var(--font-mono); letter-spacing: 1px; text-transform: uppercase; }
+    .identity-primary { display: flex; align-items: baseline; min-width: 0; gap: 12px; }
+    .identity h1 { overflow: hidden; margin: 0; font: 750 20px/1.2 var(--font-display); letter-spacing: 0; text-overflow: ellipsis; white-space: nowrap; }
+    .endpoint { overflow: hidden; color: var(--muted); font: 10px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+    .identity-actions { display: flex; flex: 0 0 auto; gap: 6px; }
+    .identity-actions .icon-btn { width: 32px; min-height: 32px; }
+    .route-summary { min-width: 0; padding: 12px 16px; overflow: hidden; border: 1px solid var(--line-dark); border-radius: 8px; background: var(--surface-muted); }
+    .route-track { display: flex; align-items: center; min-width: 0; min-height: 34px; overflow-x: auto; scrollbar-width: thin; }
+    .route-node { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; min-height: 34px; padding: 6px 10px; border: 1px solid var(--line-dark); border-radius: 8px; background: var(--surface); color: var(--ink-2); }
+    .route-node > .icon { width: 15px; height: 15px; color: var(--signal); }
+    .route-node.route-target { border-color: rgba(255, 157, 66, .48); background: var(--accent-soft); }
+    .route-node.route-target > .icon { color: var(--accent); }
+    .route-node-text { max-width: 260px; overflow: hidden; font: 600 11px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+    .route-node.route-local .route-node-text { color: var(--muted-strong); }
+    .route-link { position: relative; flex: 0 0 52px; height: 2px; overflow: hidden; border-radius: 2px; background: transparent; }
+    .route-base { position: absolute; inset: 0; display: flex; }
+    .route-base > span { flex: 0 0 1.625px; height: 2px; background: rgb(210, 234, 250); opacity: var(--base-opacity); }
+    .route-flow { display: flex; width: 16px; height: 2px; transform: translateX(-18px); animation: route-flow 3.2s linear var(--route-delay, 0s) infinite; }
+    .route-flow > span { flex: 0 0 .5px; height: 2px; background: var(--accent); opacity: var(--flow-opacity); }
+    @keyframes route-flow { from { transform: translateX(-18px); } to { transform: translateX(64px); } }
+    .route-separator { flex: 0 0 auto; margin: 0 10px; color: var(--muted); font: 600 13px var(--font-mono); }
+    .route-privilege { flex: 0 0 auto; color: var(--ink-2); font: 600 11px var(--font-mono); white-space: nowrap; }
+    .tabs { display: flex; min-height: 42px; padding: 0 clamp(24px, 4vw, 48px); border-bottom: 1px solid var(--line); background: var(--paper); }
+    .tab { position: relative; min-width: 76px; border: 0; background: transparent; color: var(--muted); font: 600 10px var(--font-mono); }
+    .tab:hover { color: var(--ink); } .tab.active { color: var(--accent); }
+    .tab.active::after { position: absolute; right: 12px; bottom: -1px; left: 12px; height: 2px; background: var(--accent); content: ""; }
+    .form-scroll { overflow-y: auto; padding: 0 clamp(24px, 4vw, 48px) 56px; scrollbar-color: #4d5c6b transparent; scrollbar-width: thin; }
+    .tab-page { display: none; width: min(100%, 980px); margin: 0 auto; } .tab-page.active { display: block; animation: page-in 180ms var(--ease-out); }
+    @keyframes page-in { from { opacity: 0; transform: translateY(5px); } }
+    .form-section { display: grid; grid-template-columns: 1fr; gap: 12px; padding: 18px 0; border-bottom: 1px solid var(--line); }
+    .section-title { display: flex; align-items: center; justify-content: space-between; }
+    .section-title h2 { margin: 0; color: var(--muted-strong); font: 600 11px var(--font-mono); letter-spacing: .4px; }
+    .section-title .btn { min-height: 30px; padding: 4px 9px; font: 600 10px var(--font-mono); }
+    .section-title .btn .icon { width: 13px; height: 13px; }
+    .fields { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 10px 12px; }
+    .field { min-width: 0; grid-column: span 6; }
+    .field.full, .field.span-12 { grid-column: 1 / -1; }
+    .field.span-2 { grid-column: span 2; } .field.span-3 { grid-column: span 3; }
+    .field.span-4 { grid-column: span 4; } .field.span-5 { grid-column: span 5; }
+    .field.span-6 { grid-column: span 6; } .field.span-7 { grid-column: span 7; }
+    .field.span-8 { grid-column: span 8; }
+    label, .label { display: block; margin-bottom: 5px; color: var(--muted); font: 9px var(--font-mono); }
+    .required::after { color: var(--accent); content: " *"; }
+    input, select, textarea { width: 100%; min-height: 36px; border: 1px solid var(--line-dark); border-radius: 6px; background: var(--surface-muted); color: var(--ink); transition: border-color 150ms ease, box-shadow 150ms ease; }
+    input, select { padding: 6px 10px; } textarea { min-height: 74px; padding: 8px 10px; resize: vertical; }
+    input:hover, select:hover, textarea:hover { border-color: #50667a; }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: 0; box-shadow: 0 0 0 2px var(--accent-soft); }
+    input::placeholder, textarea::placeholder { color: #6e8091; }
+    input[aria-invalid="true"] { border-color: var(--danger); box-shadow: 0 0 0 2px var(--danger-soft); }
+    .mono { font-family: var(--font-mono); font-size: 10px; }
+    .error { min-height: 11px; margin-top: 3px; color: var(--danger); font: 8px var(--font-mono); }
+    .secret-control { display: grid; grid-template-columns: minmax(0, 1fr) 36px 36px; }
+    .secret-control input { border-radius: 6px 0 0 6px; }
+    .secret-control .icon-btn { width: 36px; min-height: 36px; border-left: 0; border-radius: 0; background: var(--surface); }
+    .secret-control .icon-btn:last-child { border-radius: 0 6px 6px 0; }
+    .secret-control .icon-btn:hover { color: var(--accent); }
+    .secret-meta { min-height: 11px; margin-top: 3px; color: var(--muted); font: 8px var(--font-mono); }
+    .secret-meta.revealed { color: var(--accent); }
+    .mode-switch { display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px; padding: 3px; border: 1px solid var(--line-dark); border-radius: 7px; background: var(--surface); }
+    .mode-switch button { min-height: 28px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font: 600 9px var(--font-mono); }
+    .mode-switch button.active { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px rgba(255, 173, 85, .45); }
+    .toggle-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 42px; padding: 6px 9px; border: 1px solid var(--line-dark); border-radius: 6px; background: var(--surface-muted); }
+    .toggle-row > .icon { width: 15px; height: 15px; color: var(--accent); }
+    .toggle-copy strong { display: block; font-size: 10px; } .toggle-copy span { color: var(--muted); font: 8px var(--font-mono); }
+    .toggle { position: relative; width: 40px; height: 22px; margin: 0; } .toggle input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+    .toggle-ui { position: absolute; inset: 0; border: 1px solid #526577; border-radius: 12px; background: var(--paper); }
+    .toggle-ui::after { position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); content: ""; transition: transform 170ms var(--ease-spring), background-color 150ms ease; }
+    .toggle input:checked + .toggle-ui { border-color: var(--accent); background: var(--accent-soft); }
+    .toggle input:checked + .toggle-ui::after { background: var(--accent); transform: translateX(18px); }
+    .toggle input:focus-visible + .toggle-ui { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    .json-panel { display: grid; grid-template-rows: 62px minmax(0, 1fr) 38px; min-width: 0; min-height: 0; overflow: hidden; border-left: 1px solid var(--line); background: var(--code); color: var(--code-text); }
+    .json-head { display: flex; align-items: center; gap: 10px; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
+    .json-head > .icon { color: var(--accent); } .json-title { min-width: 0; }
+    .json-title strong { display: block; font: 600 11px var(--font-mono); }
+    .json-title span { display: block; margin-top: 4px; color: var(--muted); font: 9px var(--font-mono); }
+    .json-tools { display: flex; align-items: center; gap: 5px; margin-left: auto; }
+    .json-panel .icon-btn { min-height: 32px; width: 32px; border-color: transparent; }
+    .json-panel .icon-btn:hover { border-color: var(--line-dark); color: var(--accent); }
+    .view-switch { display: flex; gap: 3px; padding: 3px; border: 1px solid var(--line-dark); border-radius: 10px; background: var(--paper); }
+    .view-switch button { min-height: 26px; padding: 3px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: 9px var(--font-mono); }
+    .view-switch button.active { background: var(--accent-soft); color: var(--accent); }
+    .scope-switch { display: flex; gap: 5px; }
+    .scope-switch button { min-height: 30px; padding: 4px 9px; border: 1px solid var(--line-dark); border-radius: 8px; background: var(--paper); color: var(--muted); font: 600 9px var(--font-mono); white-space: nowrap; }
+    .scope-switch button:hover { border-color: #536a7e; color: var(--ink); }
+    .scope-switch button.active { border-color: rgba(255, 157, 66, .65); background: var(--accent-soft); color: var(--accent); }
+    .code-stage { position: relative; min-height: 0; overflow: hidden; }
+    .code-stage::before { position: absolute; top: 0; bottom: 0; left: 42px; z-index: 1; width: 1px; background: var(--line); content: ""; pointer-events: none; }
+    pre, .source { position: absolute; inset: 0; overflow: auto; margin: 0; padding: 17px 18px 48px 55px; border: 0; border-radius: 0; background: var(--code); color: var(--code-text); font: 11px/1.7 var(--font-mono); tab-size: 2; white-space: pre; scrollbar-color: #4d5c6b transparent; scrollbar-width: thin; }
+    .source { display: none; width: 100%; height: 100%; resize: none; outline: 0; } .source.active { display: block; } pre.hidden { display: none; }
+    .j-key { color: #8fd7ff; } .j-string { color: #c4df9b; } .j-number { color: var(--accent); } .j-boolean { color: #ff8b79; } .j-null { color: var(--muted); }
+    .json-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 14px; border-top: 1px solid var(--line); background: var(--code-2); color: var(--muted); font: 9px var(--font-mono); }
+    .json-valid { color: var(--signal); }
+    .statusbar { display: flex; align-items: center; min-width: 0; gap: 10px; padding: 0 18px 0 42px; border-top: 1px solid var(--line); background: var(--surface); color: var(--muted); font: 10px var(--font-mono); }
+    .statusbar .icon { width: 12px; height: 12px; color: var(--signal); } .statusbar .error-state { color: var(--danger); }
+    .status-meta { display: flex; gap: 16px; margin-left: 0; } .status-meta::before { color: #516476; content: "·"; }
+    .toast { position: fixed; right: 18px; bottom: 74px; z-index: 80; display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 10px; width: min(360px, calc(100vw - 32px)); padding: 11px; border: 1px solid rgba(255, 173, 85, .4); border-radius: var(--radius); background: var(--surface-muted); color: var(--ink); box-shadow: 0 14px 34px rgba(0, 0, 0, .28); font-size: 12px; font-weight: 700; opacity: 0; pointer-events: none; transform: translateY(14px); transition: opacity 160ms ease, transform 220ms var(--ease-spring); }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast-mark { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 6px; background: var(--accent-soft); color: var(--accent); }
+
+    @media (min-width: 1241px) {
+      .workspace.json-panel-closed { grid-template-columns: 260px minmax(600px, 1fr); }
+      .json-panel.closed { display: none; }
+    }
+    @media (max-width: 1240px) {
+      .workspace { grid-template-columns: 250px minmax(0, 1fr); }
+      .topbar { grid-template-columns: 250px minmax(0, 1fr) auto; }
+      .json-panel { position: fixed; z-index: 60; top: 54px; right: 0; bottom: 60px; width: min(480px, 84vw); box-shadow: -10px 0 30px rgba(0, 0, 0, .32); transform: translateX(100%); transition: transform 260ms var(--ease-out); }
+      .json-panel.open { transform: translateX(0); }
+    }
+    @media (max-width: 760px) {
+      body { overflow: auto; }
+      .app { grid-template-rows: auto minmax(0, 1fr) 54px; min-height: 760px; }
+      .topbar { grid-template-columns: 1fr auto; min-height: 54px; }
+      .brand { min-width: 0; border-right: 0; } .brand-copy span { display: none; }
+      .pathbar { grid-column: 1 / -1; grid-row: 2; min-height: 38px; border-top: 1px solid var(--line); }
+      .top-actions { grid-column: 2; grid-row: 1; padding: 0 10px; border-left: 0; }
+      .top-actions .top-tool { width: 34px; padding: 0; } .top-actions .top-tool span { display: none; }
+      .workspace { display: block; overflow-y: auto; }
+      .connections { display: block; border-right: 0; border-bottom: 1px solid var(--line); }
+      .connections-head { display: grid; grid-template-columns: auto minmax(170px, 1fr); align-items: center; gap: 14px; }
+      .eyebrow { margin: 0; }
+      .connection-list { display: flex; gap: 5px; overflow-x: auto; padding: 8px 10px; }
+      .connection-item { flex: 0 0 205px; margin: 0; } .connections-foot { display: none; }
+      .editor { min-height: 760px; }
+      .identity { gap: 10px; min-height: 0; padding: 14px 16px 12px; }
+      .identity h1 { font-size: 18px; } .identity-primary { align-items: flex-start; flex-direction: column; gap: 3px; }
+      .identity-actions { padding-top: 0; }
+      .route-summary { padding: 10px 12px; }
+      .route-node-text { max-width: 190px; }
+      .route-link { flex-basis: 28px; }
+      .tabs { padding: 0 16px; overflow-x: auto; } .tab { min-width: 72px; }
+      .form-scroll { padding: 0 16px 58px; } .fields { grid-template-columns: 1fr; } .field, .field.full, .field[class*="span-"] { grid-column: 1 / -1; }
+      .json-panel { top: 0; bottom: 0; width: 100vw; }
+      .statusbar { padding: 0 14px; } .status-meta span:first-child { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
+      .connection-item { opacity: 1; transform: none; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#editor">跳到编辑区域</a>
+
+  <!-- 内嵌 Lucide 图标路径，保持单文件离线可用。 -->
+  <svg aria-hidden="true" width="0" height="0" style="position:absolute">
+    <symbol id="i-terminal-square" viewBox="0 0 24 24"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M15.2 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.8z"/><path d="M17 21v-8H7v8M7 3v5h8"/></symbol>
+    <symbol id="i-braces" viewBox="0 0 24 24"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1M16 21h1a2 2 0 0 0 2-2v-5a2 2 0 0 1 2-2 2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1"/></symbol>
+    <symbol id="i-refresh-cw" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 0-15.5-6.2L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 15.5 6.2L21 16"/><path d="M16 16h5v5"/></symbol>
+    <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+    <symbol id="i-trash-2" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m20 6-11 11-5-5"/></symbol>
+    <symbol id="i-key-round" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15 7l2 2M18 4l2 2"/></symbol>
+    <symbol id="i-lock-keyhole" viewBox="0 0 24 24"><circle cx="12" cy="16" r="1"/><rect width="18" height="12" x="3" y="10" rx="2"/><path d="M7 10V7a5 5 0 0 1 10 0v3"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.1 12a10.9 10.9 0 0 1 19.8 0 10.9 10.9 0 0 1-19.8 0"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="m3 3 18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 4.2A10.8 10.8 0 0 1 21.9 12a10.7 10.7 0 0 1-2.1 3.2M6.6 6.6A10.8 10.8 0 0 0 2.1 12a10.9 10.9 0 0 0 14.3 5.8"/></symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></symbol>
+    <symbol id="i-shield-check" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-network" viewBox="0 0 24 24"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v3M12 8v3"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01M6 18h.01"/></symbol>
+    <symbol id="i-file-json" viewBox="0 0 24 24"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><polyline points="14 2 14 8 20 8"/><path d="M10 12a1 1 0 0 0-1 1v1a2 2 0 0 1-2 2 2 2 0 0 1 2 2v1a1 1 0 0 0 1 1M14 12a1 1 0 0 1 1 1v1a2 2 0 0 0 2 2 2 2 0 0 0-2 2v1a1 1 0 0 1-1 1"/></symbol>
+    <symbol id="i-panel-right-close" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18m-4-6-3-3 3-3"/></symbol>
+    <symbol id="i-circle-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></symbol>
+    <symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15M12 2l3 3-3 3"/></symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  </svg>
+
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark"><svg class="icon" aria-hidden="true"><use href="#i-terminal-square"></use></svg></div>
+        <div class="brand-copy"><strong>agent-ssh-cli</strong><span>config</span></div>
+      </div>
+      <div class="pathbar"><span class="path-index" id="path-icon" aria-hidden="true"></span><code id="config-path">~/.agent-ssh-cli/config.json</code></div>
+      <div class="top-actions">
+        <button class="btn top-tool" id="reload" type="button" title="从磁盘重新载入"><svg class="icon" aria-hidden="true"><use href="#i-refresh-cw"></use></svg><span>重新载入</span></button>
+        <button class="btn top-tool" id="json-toggle" type="button" title="JSON 面板" aria-label="打开 JSON" aria-controls="json-panel" aria-expanded="false" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-braces"></use></svg><span>JSON</span></button>
+        <button class="btn top-tool danger" id="close-editor" type="button" title="关闭编辑服务"><svg class="icon" aria-hidden="true"><use href="#i-power"></use></svg><span>关闭</span></button>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="connections" aria-label="SSH 连接">
+        <div class="connections-head">
+          <div class="eyebrow"><span>SSH 连接</span><strong id="connection-count">3 个连接</strong></div>
+          <div class="search"><svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg><input id="search" type="search" aria-label="搜索连接" placeholder="搜索名称、主机或用户"></div>
+        </div>
+        <nav class="connection-list" id="connection-list" aria-label="连接列表"></nav>
+        <div class="connections-foot"><button class="btn" id="add" type="button"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>新建连接</button></div>
+      </aside>
+
+      <main class="editor" id="editor">
+        <section class="identity" aria-labelledby="identity-name">
+          <div class="identity-head">
+            <div class="identity-copy">
+              <div class="identity-kicker"><span id="identity-mode">密码认证</span></div>
+              <div class="identity-primary"><h1 id="identity-name">生产应用</h1><span class="endpoint" id="identity-endpoint">deploy@10.20.8.14:22</span></div>
+            </div>
+            <div class="identity-actions">
+              <button class="icon-btn" id="duplicate" type="button" title="复制连接" aria-label="复制连接"><svg class="icon" aria-hidden="true"><use href="#i-copy"></use></svg></button>
+              <button class="icon-btn danger" id="delete" type="button" title="删除连接" aria-label="删除连接"><svg class="icon" aria-hidden="true"><use href="#i-trash-2"></use></svg></button>
+            </div>
+          </div>
+          <div class="route-summary" aria-label="连接线路">
+            <div class="route-track" id="connection-route"></div>
+          </div>
+        </section>
+
+        <div class="tabs" role="tablist" aria-label="配置分组">
+          <button class="tab active" type="button" role="tab" aria-selected="true" data-tab="connection">连接</button>
+          <button class="tab" type="button" role="tab" aria-selected="false" data-tab="privilege">提权</button>
+          <button class="tab" type="button" role="tab" aria-selected="false" data-tab="policy">安全</button>
+        </div>
+
+        <form class="form-scroll" id="form" novalidate>
+          <div class="tab-page active" data-page="connection">
+            <section class="form-section">
+              <div class="section-title"><h2>目标端点</h2></div>
+              <div class="fields">
+                <div class="field span-3"><label class="required" for="f-name">连接名称</label><input id="f-name" data-field="name" autocomplete="off"><div class="error" data-error="name" role="alert"></div></div>
+                <div class="field span-4"><label class="required" for="f-host">主机</label><input class="mono" id="f-host" data-field="host" autocomplete="off"><div class="error" data-error="host" role="alert"></div></div>
+                <div class="field span-2"><label class="required" for="f-port">端口</label><input class="mono" id="f-port" data-field="port" type="number" inputmode="numeric" min="1" max="65535"><div class="error" data-error="port" role="alert"></div></div>
+                <div class="field span-3"><label class="required" for="f-username">用户名</label><input class="mono" id="f-username" data-field="username" autocomplete="username"><div class="error" data-error="username" role="alert"></div></div>
+              </div>
+            </section>
+
+            <section class="form-section">
+              <div class="section-title"><h2>链路</h2></div>
+              <div class="fields">
+                <div class="field span-6"><label for="f-jumpHost">跳板机</label><select id="f-jumpHost" data-field="jumpHost"></select><div class="error" data-error="jumpHost" role="alert"></div></div>
+                <div class="field span-6"><label for="f-socksProxy">SOCKS5 代理</label><input class="mono" id="f-socksProxy" data-field="socksProxy" placeholder="socks5://127.0.0.1:1080"></div>
+              </div>
+            </section>
+
+            <section class="form-section">
+              <div class="section-title"><h2>身份认证</h2></div>
+              <div class="fields">
+                <div class="field span-3"><span class="label">认证方式</span><div class="mode-switch" aria-label="认证方式"><button class="active" type="button" data-auth="password">密码引用</button><button type="button" data-auth="key">私钥</button></div></div>
+                <div class="field span-4" data-auth-field="password"><label for="f-passwordRef">密码引用</label><input class="mono" id="f-passwordRef" data-field="passwordRef" placeholder="agentsshcli:connection"></div>
+                <div class="field span-5" data-auth-field="password"><label for="f-password">密码</label><div class="secret-control"><input id="f-password" data-secret="password" type="password" autocomplete="new-password" placeholder="使用已保存的密文"><button class="icon-btn" type="button" data-reveal="password" title="查看已保存密码" aria-label="查看已保存密码"><svg class="icon" aria-hidden="true"><use href="#i-eye"></use></svg></button><button class="icon-btn" type="button" data-replace="password" title="替换密码" aria-label="替换密码"><svg class="icon" aria-hidden="true"><use href="#i-pencil"></use></svg></button></div><div class="secret-meta" data-secret-meta="password">未加载明文</div></div>
+                <div class="field span-6" data-auth-field="key"><label for="f-privateKey">私钥路径</label><input class="mono" id="f-privateKey" data-field="privateKey" placeholder="~/.ssh/id_ed25519"></div>
+                <div class="field span-3" data-auth-field="key"><label for="f-passphrase">私钥口令</label><input id="f-passphrase" data-field="passphrase" type="password" autocomplete="new-password" placeholder="无口令时留空"></div>
+              </div>
+            </section>
+          </div>
+
+          <div class="tab-page" data-page="privilege">
+            <section class="form-section">
+              <div class="section-title"><h2>权限边界</h2></div>
+              <div class="fields">
+                <div class="field span-12"><div class="toggle-row"><svg class="icon" aria-hidden="true"><use href="#i-shield-check"></use></svg><div class="toggle-copy"><strong>允许 sudo / su</strong><span>执行前校验权限</span></div><label class="toggle" aria-label="允许提权"><input id="f-privilegeEnabled" data-bool="privilegeEnabled" type="checkbox"><span class="toggle-ui"></span></label></div></div>
+                <div class="field span-2"><label for="f-sudoUser">sudo 用户</label><input class="mono" id="f-sudoUser" data-field="sudoUser" placeholder="root"></div>
+                <div class="field span-4"><label for="f-sudoPasswordRef">sudo 密码引用</label><input class="mono" id="f-sudoPasswordRef" data-field="sudoPasswordRef" placeholder="agentsshcli:name:sudo"></div>
+                <div class="field span-2"><label for="f-suUser">su 用户</label><input class="mono" id="f-suUser" data-field="suUser" placeholder="root"></div>
+                <div class="field span-4"><label for="f-suPasswordRef">su 密码引用</label><input class="mono" id="f-suPasswordRef" data-field="suPasswordRef" placeholder="agentsshcli:name:su"></div>
+              </div>
+            </section>
+          </div>
+
+          <div class="tab-page" data-page="policy">
+            <section class="form-section">
+              <div class="section-title"><h2>文件边界</h2></div>
+              <div class="fields"><div class="field full"><label for="f-allowedLocalPaths">允许的本地路径</label><textarea class="mono" id="f-allowedLocalPaths" data-array="allowedLocalPaths" placeholder="./tmp&#10;./dist"></textarea></div></div>
+            </section>
+            <section class="form-section">
+              <div class="section-title"><h2>命令规则</h2><button class="btn" id="add-default-blacklist" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>添加黑名单默认值</button></div>
+              <div class="fields">
+                <div class="field full"><label for="f-commandWhitelist">白名单</label><textarea class="mono" id="f-commandWhitelist" data-array="commandWhitelist" placeholder="^pwd$&#10;^ls(\\s|$)"></textarea></div>
+                <div class="field full"><label for="f-commandBlacklist">黑名单</label><textarea class="mono" id="f-commandBlacklist" data-array="commandBlacklist" placeholder="^dangerous-command(\\s|$)"></textarea></div>
+              </div>
+            </section>
+          </div>
+        </form>
+      </main>
+
+      <aside class="json-panel" id="json-panel" aria-label="JSON 编辑器">
+        <div class="json-head">
+          <svg class="icon" aria-hidden="true"><use href="#i-file-json"></use></svg>
+          <div class="json-title"><strong>config.json</strong><span>与表单实时同步</span></div>
+          <div class="json-tools">
+            <div class="view-switch"><button class="active" id="preview-mode" type="button">预览</button><button id="source-mode" type="button">源码</button></div>
+            <div class="scope-switch" role="group" aria-label="JSON 显示范围"><button class="active" id="json-scope-all" type="button" aria-pressed="true">全局</button><button id="json-scope-current" type="button" aria-pressed="false">当前连接</button></div>
+            <button class="icon-btn" id="copy-json" type="button" title="复制 JSON" aria-label="复制 JSON"><svg class="icon" aria-hidden="true"><use href="#i-copy"></use></svg></button>
+            <button class="icon-btn" id="close-json" type="button" title="关闭 JSON" aria-label="关闭 JSON"><svg class="icon" aria-hidden="true"><use href="#i-panel-right-close"></use></svg></button>
+          </div>
+        </div>
+        <div class="code-stage"><pre id="json-preview" aria-live="polite"></pre><textarea class="source" id="json-source" aria-label="JSON 源码" spellcheck="false"></textarea></div>
+        <div class="json-foot"><span class="json-valid" id="json-status">有效</span><span id="json-lines">0 行</span></div>
+      </aside>
+    </div>
+
+    <footer class="statusbar">
+      <svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg><span id="status">配置有效</span>
+      <div class="status-meta"><span>UTF-8 / 2 空格</span><span id="status-count">3 个连接</span></div>
+      <button class="btn primary" id="save" type="button"><svg class="icon" aria-hidden="true"><use href="#i-save"></use></svg><span>保存配置</span></button>
+    </footer>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"><span class="toast-mark"><svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg></span><span id="toast-text"></span></div>
+
+  <script>
+    const seed = [
+      { name: "生产应用", host: "10.20.8.14", port: 22, username: "deploy", passwordRef: "agentsshcli:生产应用", jumpHost: "公网跳板机", allowedLocalPaths: ["./dist", "./releases"] },
+      { name: "公网跳板机", host: "203.0.113.24", port: 2202, username: "ops", privateKey: "~/.ssh/ops_ed25519", socksProxy: "socks5://127.0.0.1:1080" },
+      { name: "日志归档", host: "10.20.9.31", port: 22, username: "reader", privateKey: "~/.ssh/archive_rsa", privilegeEnabled: true, sudoUser: "root", sudoPasswordRef: "agentsshcli:日志归档:sudo", commandWhitelist: ["^ls(\\s|$)", "^cat\\s+/var/log/"] }
+    ];
+    let defaultCommandBlacklist = [];
+
+    let connections = structuredClone(seed);
+    let selected = 0;
+    let dirty = false;
+    let configHash = "";
+    let editVersion = 0;
+    let referenceName = connections[0]?.name || "";
+    const secretUi = new WeakMap();
+    let toastTimer;
+    let lastActivityReport = 0;
+    const ACTIVITY_REPORT_INTERVAL_MS = 30_000;
+
+    const $ = selector => document.querySelector(selector);
+    const $$ = selector => [...document.querySelectorAll(selector)];
+    const list = $("#connection-list");
+    const form = $("#form");
+    const jsonPanel = $("#json-panel");
+    const jsonPreview = $("#json-preview");
+    const jsonSource = $("#json-source");
+    const workspace = $(".workspace");
+    const jsonPanelMedia = window.matchMedia("(max-width: 1240px)");
+    let jsonPanelOpen = !jsonPanelMedia.matches;
+    let jsonScope = "all";
+    const editorToken = new URLSearchParams(location.hash.slice(1)).get("t") || "";
+    // EDITOR_VALIDATION_START：仅包含可在 Node VM 中执行的前端即时校验纯逻辑。
+    const FIELD_SCHEMA = [
+      { key: "name", type: "string", required: "连接名称不能为空", unique: "连接名称必须唯一" },
+      { key: "host", type: "string", required: "主机不能为空" },
+      { key: "port", type: "number", defaultValue: 22, required: "端口不能为空", validate: value => Number.isInteger(value) && value >= 1 && value <= 65535 ? "" : "端口范围为 1 到 65535" },
+      { key: "username", type: "string", required: "用户名不能为空" },
+      { key: "passwordRef", type: "string" },
+      { key: "privateKey", type: "string" },
+      { key: "passphrase", type: "string" },
+      { key: "socksProxy", type: "string" },
+      { key: "jumpHost", type: "string", validate: (value, context) => !value || context.items.some((entry, index) => index !== context.index && entry?.name === value) ? "" : "跳板机连接不存在" },
+      { key: "pty", type: "boolean" },
+      { key: "privilegeEnabled", type: "boolean" },
+      { key: "sudoUser", type: "string" },
+      { key: "sudoPasswordRef", type: "string" },
+      { key: "suUser", type: "string" },
+      { key: "suPasswordRef", type: "string" },
+      { key: "allowedLocalPaths", type: "array" },
+      { key: "commandWhitelist", type: "array" },
+      { key: "commandBlacklist", type: "array" }
+    ];
+    const scalarFields = FIELD_SCHEMA.filter(field => field.type === "string" || field.type === "number");
+    const booleanFields = FIELD_SCHEMA.filter(field => field.type === "boolean");
+    const arrayFields = FIELD_SCHEMA.filter(field => field.type === "array");
+    const knownFields = new Set(FIELD_SCHEMA.map(field => field.key));
+
+    function matchesFieldType(value, type) {
+      if (type === "array") return Array.isArray(value) && value.every(item => typeof item === "string");
+      return typeof value === type && (type !== "number" || Number.isFinite(value));
+    }
+
+    function validateConnections(items) {
+      if (!Array.isArray(items) || items.length === 0) return { ok: false, errors: [], message: "根节点必须是非空数组" };
+      const errors = items.map(() => ({}));
+      items.forEach((item, index) => {
+        if (!item || typeof item !== "object" || Array.isArray(item) || Object.getPrototypeOf(item) !== Object.prototype) {
+          errors[index]._root = "连接项必须是普通对象";
+          return;
+        }
+        const unknown = Object.keys(item).find(key => !knownFields.has(key));
+        if (unknown) errors[index]._root = `不支持字段 ${unknown}`;
+        FIELD_SCHEMA.forEach(field => {
+          const rawValue = item[field.key];
+          const rawEmpty = rawValue === undefined || rawValue === null || (typeof rawValue === "string" && !rawValue.trim());
+          const value = rawEmpty && field.defaultValue !== undefined ? field.defaultValue : rawValue;
+          const empty = value === undefined || value === null || (typeof value === "string" && !value.trim());
+          if (field.required && empty) errors[index][field.key] = field.required;
+          else if (!empty && !matchesFieldType(value, field.type)) errors[index][field.key] = `${field.key} 类型必须为 ${field.type}`;
+          else if (field.unique && items.some((entry, candidate) => candidate !== index && entry?.[field.key] === value)) errors[index][field.key] = field.unique;
+          else if (field.validate && !errors[index][field.key]) {
+            const message = field.validate(value, { item, index, items });
+            if (message) errors[index][field.key] = message;
+          }
+        });
+        if (!item.passwordRef && !item.privateKey) errors[index]._auth = "必须配置密码引用或私钥";
+        if (item.passwordRef && item.privateKey) errors[index]._auth = "密码引用和私钥不能同时配置";
+      });
+      const firstIndex = errors.findIndex(item => Object.keys(item).length > 0);
+      const firstMessage = firstIndex >= 0 ? Object.values(errors[firstIndex])[0] : "";
+      return { ok: firstIndex < 0, errors, message: firstIndex < 0 ? "" : `第 ${firstIndex + 1} 个连接：${firstMessage}` };
+    }
+
+    // EDITOR_VALIDATION_END
+
+    // EDITOR_ROUTE_START：仅包含可在 Node VM 中执行的线路计算纯逻辑。
+    function connectionEndpoint(item, fallback = {}) {
+      const username = item?.username || fallback.username || "?";
+      const host = item?.host || fallback.host || "?";
+      const port = item?.port ?? fallback.port ?? 22;
+      return `${username}@${host}:${port}`;
+    }
+
+    function proxyEndpoint(value = "") {
+      const authority = String(value).replace(/^socks5:\/\//, "").split("/")[0];
+      return authority.slice(authority.lastIndexOf("@") + 1);
+    }
+
+    function directConnectionTransport(item) {
+      return item?.socksProxy ? "targetSocks" : "direct";
+    }
+
+    function connectionTransport(item, items) {
+      if (item?.jumpHost) {
+        const jump = items.find(candidate => candidate.name === item.jumpHost);
+        if (!jump) return { kind: "invalidJump" };
+        return { kind: "jump", jump, jumpTransport: directConnectionTransport(jump) };
+      }
+      return { kind: directConnectionTransport(item) };
+    }
+
+    function buildConnectionRoute(item, items) {
+      if (!item) return [];
+      const route = [{ kind: "local", label: "本机", detail: "localhost" }];
+      const transport = connectionTransport(item, items);
+      if (transport.kind === "jump") {
+        if (transport.jumpTransport === "targetSocks") route.push({ kind: "proxy", label: "SOCKS5", detail: proxyEndpoint(transport.jump.socksProxy) });
+        route.push({ kind: "jump", label: transport.jump.name, detail: connectionEndpoint(transport.jump) });
+      } else if (transport.kind === "targetSocks") {
+        route.push({ kind: "proxy", label: "SOCKS5", detail: proxyEndpoint(item.socksProxy) });
+      }
+      route.push({ kind: "target", label: item.name || "目标服务器", detail: connectionEndpoint(item) });
+      if (item.privilegeEnabled) {
+        const users = [`sudo:${item.sudoUser || "root"}`];
+        if (item.suPasswordRef || item.suUser) users.push(`su:${item.suUser || "root"}`);
+        route.push({ kind: "privilege", label: "提权", detail: users.join(" · ") });
+      }
+      return route;
+    }
+    // EDITOR_ROUTE_END
+    function escapeHtml(value = "") {
+      return String(value).replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
+    }
+
+    function current() { return connections[selected]; }
+    function authMode(item = current()) { return item?.privateKey ? "key" : "password"; }
+    function iconUse(id) { return `<svg class="icon" aria-hidden="true"><use href="#${id}"></use></svg>`; }
+    function connectionView(item) {
+      const mode = authMode(item);
+      return {
+        displayName: item.name || "未命名连接",
+        endpoint: connectionEndpoint(item, { username: "user", host: "host" }),
+        mode,
+        authLabel: mode === "key" ? "私钥认证" : "密码认证",
+        authIcon: mode === "key" ? "i-key-round" : "i-lock-keyhole"
+      };
+    }
+    function renderChromeIcons() {
+      $("#path-icon").innerHTML = iconUse("i-file-json");
+    }
+
+    function renderList() {
+      const query = $("#search").value.trim().toLowerCase();
+      const visible = connections.map((item, index) => ({ item, index })).filter(({ item }) => `${item.name || ""} ${item.host || ""} ${item.username || ""}`.toLowerCase().includes(query));
+      list.innerHTML = visible.length ? visible.map(({ item, index }, order) => {
+        const view = connectionView(item);
+        return `<button class="connection-item${index === selected ? " active" : ""}" style="--order:${order}" type="button" data-index="${index}" aria-current="${index === selected}" aria-label="第 ${index + 1} 个连接：${escapeHtml(view.displayName)}">
+          <span class="connection-index">${iconUse("i-server")}</span>
+          <span class="connection-copy"><strong>${escapeHtml(view.displayName)}</strong><span>${escapeHtml(view.endpoint)}</span></span>
+          <span class="auth-icon" title="${view.authLabel}" aria-label="${view.authLabel}">${iconUse(view.authIcon)}</span>
+        </button>`;
+      }).join("") : `<div class="connection-empty">未找到连接</div>`;
+      $("#connection-count").textContent = `${connections.length} 个连接`;
+      $("#status-count").textContent = `${connections.length} 个连接`;
+    }
+
+    function updateCurrentListItem() {
+      const button = list.querySelector(`[data-index="${selected}"]`);
+      const item = current();
+      if (!button || !item) return;
+      const view = connectionView(item);
+      button.setAttribute("aria-label", `第 ${selected + 1} 个连接：${view.displayName}`);
+      button.querySelector(".connection-copy strong").textContent = view.displayName;
+      button.querySelector(".connection-copy span").textContent = view.endpoint;
+      const authIcon = button.querySelector(".auth-icon");
+      authIcon.innerHTML = iconUse(view.authIcon);
+      authIcon.title = view.authLabel;
+      authIcon.setAttribute("aria-label", view.authLabel);
+    }
+
+    function renderJumpHosts() {
+      const field = $("#f-jumpHost");
+      const value = current()?.jumpHost || "";
+      const candidates = connections.filter((_, index) => index !== selected);
+      const options = candidates.length
+        ? candidates.map(item => {
+            const endpoint = connectionEndpoint(item);
+            return `<option value="${escapeHtml(item.name)}">${escapeHtml(item.name)} · ${escapeHtml(endpoint)}</option>`;
+          }).join("")
+        : `<option value="" disabled>暂无其他连接</option>`;
+      field.innerHTML = `<option value="">不使用跳板机</option>${options}`;
+      field.value = value;
+    }
+
+    function secretState(item) {
+      if (!secretUi.has(item)) {
+        secretUi.set(item, { draftValue: "", revealedValue: "", mode: "empty", visible: false, timer: 0, createdRef: false });
+      }
+      return secretUi.get(item);
+    }
+
+    function clearSecretState(item) {
+      const state = secretUi.get(item);
+      if (!state) return;
+      clearTimeout(state.timer);
+      state.draftValue = "";
+      state.revealedValue = "";
+      state.mode = "empty";
+      state.visible = false;
+      state.createdRef = false;
+    }
+
+    function renderSecret() {
+      const item = current();
+      const state = secretState(item);
+      const field = $("#f-password");
+      const reveal = $("[data-reveal=\"password\"]");
+      const meta = $("[data-secret-meta=\"password\"]");
+      field.value = state.mode === "revealed" ? state.revealedValue : state.draftValue;
+      field.readOnly = state.mode === "revealed";
+      field.type = state.mode === "revealed" && state.visible ? "text" : "password";
+      reveal.disabled = !item.passwordRef || state.mode === "draft";
+      reveal.querySelector("use").setAttribute("href", state.visible ? "#i-eye-off" : "#i-eye");
+      reveal.setAttribute("aria-label", state.visible ? "隐藏密码" : "查看已保存密码");
+      meta.textContent = state.mode === "draft" ? "新密码待保存" : state.mode === "revealed" ? "只读明文将在短时间后清除" : item.passwordRef ? "已加密" : "未保存密码";
+      meta.classList.toggle("revealed", state.mode === "revealed");
+    }
+
+    function replacePassword() {
+      const item = current();
+      const state = secretState(item);
+      clearTimeout(state.timer);
+      state.revealedValue = "";
+      state.draftValue = "";
+      state.mode = "draft";
+      state.visible = false;
+      renderSecret();
+      $("#f-password").focus();
+    }
+
+    async function revealPassword() {
+      const item = current();
+      const state = secretState(item);
+      if (state.mode === "revealed" && state.revealedValue) {
+        state.visible = !state.visible;
+        renderSecret();
+        return;
+      }
+      if (!item.passwordRef) return toast("当前连接没有可解密的密码引用");
+      if (location.protocol === "file:") return toast("请通过 agentsshcli edit-config 启动后查看密码");
+      const button = $("[data-reveal=\"password\"]");
+      button.disabled = true;
+      try {
+        const payload = await apiRequest("/api/secrets/reveal", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ connection: item.name, kind: "password" })
+        });
+        state.revealedValue = payload.secret;
+        state.mode = "revealed";
+        state.visible = true;
+        clearTimeout(state.timer);
+        state.timer = setTimeout(() => {
+          if (state.mode !== "revealed") return;
+          state.revealedValue = "";
+          state.visible = false;
+          state.mode = "empty";
+          if (current() === item) renderSecret();
+        }, 15000);
+      } catch (error) {
+        toast(error.message);
+      } finally {
+        renderSecret();
+      }
+    }
+
+    function renderForm() {
+      const item = current();
+      if (!item) return;
+      if (item.name) referenceName = item.name;
+      scalarFields.forEach(({ key, defaultValue = "" }) => {
+        const field = $(`#f-${key}`);
+        if (field) field.value = item[key] ?? defaultValue;
+      });
+      booleanFields.forEach(({ key }) => {
+        const field = $(`#f-${key}`);
+        if (field) field.checked = Boolean(item[key]);
+      });
+      arrayFields.forEach(({ key }) => { $(`#f-${key}`).value = (item[key] || []).join("\n"); });
+      renderJumpHosts();
+      renderSecret();
+      setAuthMode(authMode(item), false);
+      renderIdentity();
+      validate();
+    }
+
+    function renderConnectionRoute() {
+      const icons = {
+        local: "i-terminal-square",
+        proxy: "i-network",
+        jump: "i-route",
+        target: "i-server",
+        privilege: "i-shield-check"
+      };
+      const route = buildConnectionRoute(current(), connections);
+      const flow = Array.from({ length: 32 }, (_, index) => {
+        const position = (index + 0.5) / 32;
+        const opacity = 1 - Math.abs(position * 2 - 1);
+        return `<span style="--flow-opacity:${opacity.toFixed(3)}"></span>`;
+      }).join("");
+      const base = Array.from({ length: 32 }, (_, index) => {
+        const opacity = 0.24 + (index / 31) * 0.08;
+        return `<span style="--base-opacity:${opacity.toFixed(3)}"></span>`;
+      }).join("");
+      $("#connection-route").innerHTML = route.map((node, index) => {
+        if (node.kind === "privilege") {
+          return `<span class="route-separator" aria-hidden="true">/</span><span class="route-privilege" title="${escapeHtml(node.label)}">${escapeHtml(node.detail)}</span>`;
+        }
+        const delay = index * 0.3 - 0.1;
+        const link = index ? `<span class="route-link" style="--route-delay:${delay.toFixed(1)}s" aria-hidden="true"><span class="route-base">${base}</span><span class="route-flow">${flow}</span></span>` : "";
+        const text = node.kind === "local"
+          ? node.label
+          : node.kind === "target" ? node.detail : `${node.label} · ${node.detail}`;
+        return `${link}<span class="route-node route-${escapeHtml(node.kind)}" title="${escapeHtml(`${node.label} ${node.detail}`.trim())}">${iconUse(icons[node.kind] || "i-server")}<span class="route-node-text">${escapeHtml(text)}</span></span>`;
+      }).join("");
+    }
+
+    function renderIdentity() {
+      const item = current();
+      if (!item) return;
+      const view = connectionView(item);
+      $("#identity-name").textContent = view.displayName;
+      $("#identity-endpoint").textContent = view.endpoint;
+      $("#identity-mode").textContent = view.authLabel;
+      renderConnectionRoute();
+    }
+
+    function setAuthMode(mode, mutate = true) {
+      $$('[data-auth]').forEach(button => button.classList.toggle("active", button.dataset.auth === mode));
+      $$('[data-auth-field]').forEach(field => { field.hidden = field.dataset.authField !== mode; });
+      if (!mutate) return;
+      const item = current();
+      if (mode === "key") {
+        clearSecretState(item);
+        delete item.password;
+        delete item.passwordRef;
+        item.privateKey ||= "~/.ssh/id_ed25519";
+      } else {
+        delete item.privateKey;
+        delete item.passphrase;
+      }
+      markDirty();
+      renderForm();
+      updateCurrentListItem();
+      renderJson();
+    }
+
+    function updateFromForm(event) {
+      const item = current();
+      if (event?.target.matches("[data-secret]")) {
+        const state = secretState(item);
+        clearTimeout(state.timer);
+        state.draftValue = event.target.value;
+        if (state.draftValue && !item.passwordRef) {
+          item.passwordRef = `agentsshcli:${item.name || "connection"}`;
+          state.createdRef = true;
+          $("#f-passwordRef").value = item.passwordRef;
+        } else if (!state.draftValue && state.createdRef) {
+          delete item.passwordRef;
+          state.createdRef = false;
+          $("#f-passwordRef").value = "";
+        }
+        state.mode = state.draftValue ? "draft" : "empty";
+        state.visible = false;
+        markDirty();
+        renderJson();
+        validate();
+        renderSecret();
+        return;
+      }
+      scalarFields.forEach(({ key, type }) => {
+        const field = $(`#f-${key}`);
+        if (!field) return;
+        const value = type === "number" ? Number(field.value) : field.value.trim();
+        if (value === "" || (type === "number" && !Number.isFinite(value))) delete item[key];
+        else item[key] = value;
+      });
+      booleanFields.forEach(({ key }) => {
+        const field = $(`#f-${key}`);
+        if (field) item[key] = field.checked;
+      });
+      arrayFields.forEach(({ key }) => {
+        const values = $(`#f-${key}`).value.split("\n").map(value => value.trim()).filter(Boolean);
+        if (values.length) item[key] = values; else delete item[key];
+      });
+      if (item.name && referenceName && item.name !== referenceName) {
+        connections.forEach(entry => { if (entry.jumpHost === referenceName) entry.jumpHost = item.name; });
+        referenceName = item.name;
+      }
+      markDirty();
+      if ($("#search").value.trim()) renderList(); else updateCurrentListItem();
+      renderIdentity();
+      renderJson();
+      validate();
+    }
+
+    function validate() {
+      const result = validateConnections(connections);
+      const errors = result.errors[selected] || {};
+      FIELD_SCHEMA.filter(field => field.required || field.unique || field.validate).forEach(({ key }) => {
+        const field = $(`#f-${key}`);
+        const error = $(`[data-error="${key}"]`);
+        if (field) field.setAttribute("aria-invalid", errors[key] ? "true" : "false");
+        if (error) error.textContent = errors[key] || "";
+      });
+      const count = result.errors.reduce((total, item) => total + Object.keys(item).length, 0);
+      $("#status").textContent = result.ok ? "配置有效" : `${count} 个配置项需要修正`;
+      $("#status").classList.toggle("error-state", !result.ok);
+      $(".statusbar > .icon use").setAttribute("href", result.ok ? "#i-check" : "#i-circle-alert");
+      return result.ok;
+    }
+
+    // EDITOR_JSON_COMPARE_START：规范化字段顺序，避免只因对象键顺序不同而误报修改。
+    function ordered(item) {
+      const result = {};
+      FIELD_SCHEMA.forEach(({ key }) => {
+        const value = item[key];
+        if (value !== undefined && value !== "" && !(Array.isArray(value) && value.length === 0)) result[key] = value;
+      });
+      return result;
+    }
+
+    function connectionsSemanticallyEqual(left, right) {
+      return JSON.stringify(left.map(ordered)) === JSON.stringify(right.map(ordered));
+    }
+    // EDITOR_JSON_COMPARE_END
+
+    function jsonText() {
+      const value = jsonScope === "current" ? ordered(current()) : connections.map(ordered);
+      return JSON.stringify(value, null, 2);
+    }
+
+    function highlight(json) {
+      return escapeHtml(json).replace(/(&quot;(?:\\u[a-fA-F0-9]{4}|\\[^u]|[^\\&])*&quot;)(\s*:)?|\b(true|false)\b|\b(null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g, (match, token, colon, bool, nil) => {
+        if (token) return `<span class="${colon ? "j-key" : "j-string"}">${token}</span>${colon || ""}`;
+        if (bool) return `<span class="j-boolean">${match}</span>`;
+        if (nil) return `<span class="j-null">${match}</span>`;
+        return `<span class="j-number">${match}</span>`;
+      });
+    }
+
+    function renderJson() {
+      const text = jsonText();
+      jsonPreview.innerHTML = highlight(text);
+      if (!jsonSource.matches(":focus")) jsonSource.value = text;
+      $("#json-lines").textContent = `${text.split("\n").length} 行`;
+    }
+
+    function renderAll() { renderList(); renderForm(); renderJson(); updateSyncState(); }
+
+    function markDirty() { editVersion += 1; dirty = true; updateSyncState(); }
+    function updateSyncState() {
+      $("#save").classList.toggle("dirty", dirty);
+    }
+
+    function selectConnection(index) {
+      if (index === selected) return;
+      if (!commitPendingJsonSource()) return;
+      selected = index;
+      renderAll();
+      if (jsonSource.classList.contains("active")) jsonSource.value = jsonText();
+    }
+
+    function addDefaultBlacklist() {
+      const field = $("#f-commandBlacklist");
+      const currentValues = field.value.split("\n").map(value => value.trim()).filter(Boolean);
+      const merged = [...new Set([...currentValues, ...defaultCommandBlacklist])];
+      if (merged.length === currentValues.length) return toast("黑名单默认值已存在");
+      field.value = merged.join("\n");
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      toast(`已添加 ${merged.length - currentValues.length} 条黑名单默认值`);
+    }
+
+    function addConnection() {
+      if (!commitPendingJsonSource()) return;
+      let number = connections.length + 1;
+      let name = `新连接 ${number}`;
+      while (connections.some(item => item.name === name)) name = `新连接 ${++number}`;
+      connections.push({ name, host: "", port: 22, username: "root" });
+      selected = connections.length - 1;
+      $("#search").value = "";
+      markDirty();
+      renderAll();
+      $("#f-host").focus();
+    }
+
+    function duplicateConnection() {
+      if (!commitPendingJsonSource()) return;
+      const copy = structuredClone(current());
+      let number = 2;
+      const base = `${copy.name || "连接"} 副本`;
+      copy.name = base;
+      while (connections.some(item => item.name === copy.name)) copy.name = `${base} ${number++}`;
+      delete copy.passwordRef;
+      delete copy.sudoPasswordRef;
+      delete copy.suPasswordRef;
+      connections.splice(selected + 1, 0, copy);
+      clearSecretState(copy);
+      selected += 1;
+      markDirty();
+      renderAll();
+      toast("连接已复制");
+    }
+
+    function deleteConnection() {
+      if (!commitPendingJsonSource()) return;
+      if (connections.length === 1) return toast("至少保留一个连接");
+      const removed = connections.splice(selected, 1)[0];
+      selected = Math.min(selected, connections.length - 1);
+      markDirty();
+      renderAll();
+      toast(`已删除“${removed.name}”`);
+    }
+
+    function parseAndValidateSource(text = jsonSource.value) {
+      try {
+        const parsed = JSON.parse(text);
+        const candidateConnections = jsonScope === "current"
+          ? connections.map((item, index) => index === selected ? parsed : item)
+          : parsed;
+        const validation = validateConnections(candidateConnections);
+        if (!validation.ok) return { ok: false, kind: "structure", error: new Error(validation.message) };
+        return { ok: true, candidateConnections };
+      } catch (error) {
+        return { ok: false, kind: "syntax", error };
+      }
+    }
+
+    function renderJsonStatus(result, pending = false) {
+      const status = $("#json-status");
+      status.textContent = result.ok ? (pending ? "有效，待应用" : "有效") : result.kind === "syntax" ? "JSON 无效" : "结构无效";
+      status.classList.toggle("json-valid", result.ok);
+    }
+
+    function reconcileSecretStates(previousStates, parsed) {
+      const nextByName = new Map(parsed.map(item => [item.name, item]));
+      const transfers = [];
+      const clears = [];
+      previousStates.forEach(({ item, state }) => {
+        if (!state) return;
+        const next = nextByName.get(item.name);
+        if (state.mode === "draft" && (!next || next.passwordRef !== item.passwordRef)) {
+          throw new Error(`连接“${item.name}”有待保存密码，请先保存或清空密码草稿`);
+        }
+        if (!next || (state.mode === "revealed" && next.passwordRef !== item.passwordRef)) {
+          clears.push(item);
+        } else {
+          transfers.push({ item: next, state });
+        }
+      });
+      return { transfers, clears };
+    }
+
+    function commitPendingJsonSource() {
+      if (!jsonSource.classList.contains("active")) return true;
+      return applySource();
+    }
+
+    function applySource() {
+      const result = parseAndValidateSource();
+      renderJsonStatus(result);
+      if (!result.ok) {
+        toast(`JSON 未应用：${result.error.message}`);
+        return false;
+      }
+      try {
+        const previousStates = connections.map(item => ({ item, state: secretUi.get(item) }));
+        const plan = reconcileSecretStates(previousStates, result.candidateConnections);
+        const changed = !connectionsSemanticallyEqual(result.candidateConnections, connections);
+        plan.clears.forEach(clearSecretState);
+        plan.transfers.forEach(({ item, state }) => secretUi.set(item, state));
+        connections = result.candidateConnections;
+        selected = Math.min(selected, connections.length - 1);
+        referenceName = current()?.name || "";
+        if (changed && !dirty) markDirty();
+        renderAll();
+        return true;
+      } catch (error) {
+        renderJsonStatus({ ok: false, kind: "structure" });
+        toast(`JSON 未应用：${error.message}`);
+        return false;
+      }
+    }
+
+    function syncJsonScopeState() {
+      const all = jsonScope === "all";
+      $("#json-scope-all").classList.toggle("active", all);
+      $("#json-scope-current").classList.toggle("active", !all);
+      $("#json-scope-all").setAttribute("aria-pressed", String(all));
+      $("#json-scope-current").setAttribute("aria-pressed", String(!all));
+    }
+
+    function setJsonScope(scope) {
+      if (scope === jsonScope) return;
+      if (!commitPendingJsonSource()) return;
+      jsonScope = scope;
+      syncJsonScopeState();
+      renderJson();
+      if (jsonSource.classList.contains("active")) jsonSource.value = jsonText();
+    }
+
+    function setJsonView(mode) {
+      const source = mode === "source";
+      if (!source && !commitPendingJsonSource()) return;
+      $("#preview-mode").classList.toggle("active", !source);
+      $("#source-mode").classList.toggle("active", source);
+      jsonPreview.classList.toggle("hidden", source);
+      jsonSource.classList.toggle("active", source);
+      form.inert = source;
+      if (source) { jsonSource.value = jsonText(); jsonSource.focus(); }
+    }
+
+    function syncJsonPanelState() {
+      workspace.classList.toggle("json-panel-closed", !jsonPanelOpen);
+      jsonPanel.classList.toggle("closed", !jsonPanelOpen);
+      jsonPanel.classList.toggle("open", jsonPanelOpen);
+      const toggle = $("#json-toggle");
+      toggle.setAttribute("aria-expanded", String(jsonPanelOpen));
+      toggle.setAttribute("aria-pressed", String(jsonPanelOpen));
+      toggle.classList.toggle("active", jsonPanelOpen);
+      toggle.setAttribute("aria-label", jsonPanelOpen ? "关闭 JSON" : "打开 JSON");
+      toggle.title = jsonPanelOpen ? "关闭 JSON" : "打开 JSON";
+    }
+
+    function setJsonPanelOpen(open) {
+      if (!open && jsonPanelOpen && !commitPendingJsonSource()) return;
+      jsonPanelOpen = open;
+      syncJsonPanelState();
+    }
+
+    function toast(message) {
+      clearTimeout(toastTimer);
+      $("#toast-text").textContent = message;
+      $("#toast").classList.add("show");
+      toastTimer = setTimeout(() => $("#toast").classList.remove("show"), 2300);
+    }
+
+    async function apiRequest(path, options = {}) {
+      const headers = { ...(options.headers || {}), "X-Editor-Token": editorToken };
+      const response = await fetch(path, { ...options, headers, cache: "no-store" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || `请求失败 (${response.status})`);
+      return payload;
+    }
+
+    function reportEditorActivity() {
+      if (location.protocol === "file:") return;
+      const now = Date.now();
+      if (now - lastActivityReport < ACTIVITY_REPORT_INTERVAL_MS) return;
+      lastActivityReport = now;
+      apiRequest("/api/activity", { method: "POST", body: "{}" }).catch(() => {});
+    }
+
+    async function loadConfiguration(expectedVersion = editVersion) {
+      if (location.protocol === "file:") {
+        renderAll();
+        return true;
+      }
+      try {
+        const payload = await apiRequest("/api/config");
+        const nextConnections = payload.connections;
+        const connectionValidation = validateConnections(nextConnections);
+        if (!connectionValidation.ok) throw new Error(`编辑器连接配置格式错误：${connectionValidation.message}`);
+        const nextBlacklist = payload.defaults?.commandBlacklist;
+        if (!Array.isArray(nextBlacklist) || !nextBlacklist.every(value => typeof value === "string")) {
+          throw new Error("编辑器默认黑名单格式错误");
+        }
+        if (typeof payload.hash !== "string" || !payload.hash) throw new Error("编辑器配置版本格式错误");
+        if (typeof payload.path !== "string" || !payload.path) throw new Error("编辑器配置路径格式错误");
+        const snapshot = {
+          connections: nextConnections,
+          commandBlacklist: nextBlacklist,
+          hash: payload.hash,
+          path: payload.path
+        };
+
+        if (editVersion !== expectedVersion) {
+          toast("重新载入期间配置已被修改，磁盘内容未应用");
+          return false;
+        }
+
+        connections = snapshot.connections;
+        defaultCommandBlacklist = snapshot.commandBlacklist;
+        configHash = snapshot.hash;
+        selected = 0;
+        referenceName = connections[0].name;
+        dirty = false;
+        editVersion = 0;
+        $("#config-path").textContent = snapshot.path;
+        $("#add-default-blacklist").disabled = false;
+        renderAll();
+        return true;
+      } catch (error) {
+        toast(error.message);
+        return false;
+      }
+    }
+
+    async function reloadConfiguration() {
+      if (location.protocol === "file:") return toast("文件预览模式无法从磁盘重新载入");
+      if (dirty && !window.confirm("当前修改尚未保存，仍要从磁盘重新载入吗？")) return;
+      const button = $("#reload");
+      button.disabled = true;
+      const loaded = await loadConfiguration();
+      button.disabled = false;
+      if (loaded) toast("已从磁盘重新载入");
+    }
+
+    async function closeEditor() {
+      if (dirty && !window.confirm("当前修改尚未保存，仍要关闭编辑服务吗？")) return;
+      if (location.protocol === "file:") return toast("文件预览模式没有编辑服务");
+      const button = $("#close-editor");
+      button.disabled = true;
+      try {
+        await apiRequest("/api/stop", { method: "POST", body: "{}" });
+        toast("编辑服务已关闭");
+        setTimeout(() => window.close(), 150);
+      } catch (error) {
+        button.disabled = false;
+        toast(error.message);
+      }
+    }
+
+    async function saveConfiguration() {
+      if (jsonSource.classList.contains("active") && !applySource()) return;
+      if (!validate()) return toast("请先修正配置错误");
+      if (location.protocol === "file:") return toast("文件预览模式不会写入磁盘");
+
+      const saveVersion = editVersion;
+      const saveConnections = structuredClone(connections);
+      const draftSnapshots = connections.flatMap(item => {
+        const state = secretUi.get(item);
+        return item.passwordRef && state?.mode === "draft" && state.draftValue
+          ? [{ item, state, connection: item.name, password: state.draftValue }]
+          : [];
+      });
+      const passwordUpdates = draftSnapshots.map(({ connection, password }) => ({ connection, password }));
+      const button = $("#save");
+      button.disabled = true;
+      try {
+        const payload = await apiRequest("/api/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ connections: saveConnections, expectedHash: configHash, passwordUpdates })
+        });
+        configHash = payload.hash;
+        draftSnapshots.forEach(snapshot => {
+          const state = secretUi.get(snapshot.item);
+          if (state === snapshot.state && state.mode === "draft" && state.draftValue === snapshot.password) {
+            clearSecretState(snapshot.item);
+          }
+        });
+        dirty = editVersion !== saveVersion;
+        updateSyncState();
+        renderSecret();
+        toast("配置已保存");
+      } catch (error) {
+        toast(error.message);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    list.addEventListener("click", event => {
+      const item = event.target.closest("[data-index]");
+      if (item) selectConnection(Number(item.dataset.index));
+    });
+    $("#search").addEventListener("input", renderList);
+    form.addEventListener("input", updateFromForm);
+    form.addEventListener("click", event => {
+      const auth = event.target.closest("[data-auth]");
+      const reveal = event.target.closest("[data-reveal]");
+      const replace = event.target.closest("[data-replace]");
+      if (auth) setAuthMode(auth.dataset.auth);
+      if (reveal) revealPassword();
+      if (replace) replacePassword();
+    });
+
+    $$(".tab").forEach(tab => tab.addEventListener("click", () => {
+      $$(".tab").forEach(item => { const active = item === tab; item.classList.toggle("active", active); item.setAttribute("aria-selected", String(active)); });
+      $$(".tab-page").forEach(page => page.classList.toggle("active", page.dataset.page === tab.dataset.tab));
+    }));
+
+    $("#add").addEventListener("click", addConnection);
+    $("#duplicate").addEventListener("click", duplicateConnection);
+    $("#delete").addEventListener("click", deleteConnection);
+    $("#save").addEventListener("click", saveConfiguration);
+    $("#reload").addEventListener("click", reloadConfiguration);
+    $("#close-editor").addEventListener("click", closeEditor);
+    $("#add-default-blacklist").addEventListener("click", addDefaultBlacklist);
+
+    $("#json-toggle").addEventListener("click", () => setJsonPanelOpen(!jsonPanelOpen));
+    $("#close-json").addEventListener("click", () => setJsonPanelOpen(false));
+    jsonPanelMedia.addEventListener("change", event => setJsonPanelOpen(!event.matches));
+    $("#preview-mode").addEventListener("click", () => setJsonView("preview"));
+    $("#source-mode").addEventListener("click", () => setJsonView("source"));
+    $("#json-scope-all").addEventListener("click", () => setJsonScope("all"));
+    $("#json-scope-current").addEventListener("click", () => setJsonScope("current"));
+    jsonSource.addEventListener("input", () => {
+      markDirty();
+      renderJsonStatus(parseAndValidateSource(), true);
+    });
+    $("#copy-json").addEventListener("click", async () => {
+      try {
+        const text = jsonSource.classList.contains("active") ? jsonSource.value : jsonText();
+        await navigator.clipboard.writeText(text);
+        toast("JSON 已复制");
+      }
+      catch { toast("浏览器未允许访问剪贴板"); }
+    });
+
+    ["pointerdown", "keydown", "input"].forEach(type => {
+      document.addEventListener(type, reportEditorActivity, { capture: true, passive: true });
+    });
+
+    window.addEventListener("beforeunload", event => {
+      if (!dirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
+
+    window.addEventListener("keydown", event => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); $("#save").click(); }
+    });
+
+    syncJsonScopeState();
+    syncJsonPanelState();
+    renderChromeIcons();
+    loadConfiguration();
+  </script>
+</body>
+</html>

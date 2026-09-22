@@ -1,5 +1,27 @@
 # Release Notes
 
+## v0.6.0
+
+新增仅监听本机回环地址的可视化 SSH 配置编辑器，并强化连接线路、凭据保存和跨平台事务安全：
+
+- 新增 `agentsshcli edit-config [--config <path>]` 与 `stop-editor`：浏览器页面支持连接增删复制、表单/JSON 双向编辑、全局/当前连接范围、搜索、跳板机选择、默认黑名单和实时连接线路。
+- 编辑器服务只监听 `127.0.0.1`，token 由子进程生成并通过 URL fragment 传递；Host、Origin、token、请求大小、重复头、Transfer-Encoding 和 Content-Length 均在本机 HTTP 层校验。
+- 连续 10 分钟没有经过认证的有效 API 或真实页面输入时自动退出；启动锁、状态文件所有权、空闲计时、监听循环和清理统一收敛到 `editor/process.rs`。
+- 配置保存采用 hash 并发检查；密码查看由本机后端解密并在页面 15 秒后清除，新密码通过双文件事务加密写入 `secrets.json`，配置正文只保留引用。
+- 事务使用随机 ID 和显式阶段恢复；Windows 改用系统 `ReplaceFileW` 原子替换，修复普通配置保存无法覆盖目标文件及 manifest 删除窗口可能破坏恢复的问题。
+- JSON 源码切换、连接结构操作和表单编辑使用统一提交边界；重载响应提交前校验 `editVersion`，避免慢请求覆盖请求期间的新输入。
+- SSH 传输决策抽为共享纯逻辑：目标 `jumpHost` 优先于目标 SOCKS5，跳板机自身 SOCKS5 生效但不递归其 `jumpHost`；Rust 和页面共同消费线路 fixture。
+- 编辑器隐藏连接级 PTY 控件，但保留旧配置中的 `pty`；`exec --pty` / `--no-pty` 行为不变。
+- README、项目 SKILL 与本机 Skill 同步编辑器命令、安全边界、空闲退出和密码管理流程。
+
+验证：
+
+- `npm test` 通过：平台分支检查、前端/Rust 共享契约和 69 项 Rust 测试全部通过。
+- `win32-x64` 构建阶段额外执行现有目标文件原子替换测试，失败时不会进入 npm 发布阶段。
+- `cargo clippy --all-targets -- -D warnings` 通过。
+- `npm run build:native` release 构建通过，`agentsshcli-native --version` 输出 `0.6.0`。
+- 真实浏览器验证桌面/移动端布局、JSON 范围与源码边界、重载竞争保护、线路动画、活动上报和关闭服务。
+
 ## v0.5.7
 
 单文件上传前校验远端父目录，把指向性差的底层报错换成可操作提示：

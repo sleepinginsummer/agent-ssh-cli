@@ -1,0 +1,57 @@
+[
+  {
+    "name": "direct",
+    "target": "target",
+    "connections": [
+      {
+        "name": "target",
+        "host": "10.0.0.1",
+        "username": "root",
+        "privateKey": "~/.ssh/id_ed25519"
+      }
+    ],
+    "expectedKinds": ["local", "target"],
+    "expectedTransport": "direct"
+  },
+  {
+    "name": "target socks",
+    "target": "target",
+    "connections": [
+      {
+        "name": "target",
+        "host": "10.0.0.1",
+        "username": "root",
+        "privateKey": "~/.ssh/id_ed25519",
+        "socksProxy": "socks5://user:secret@127.0.0.1:1080"
+      }
+    ],
+    "expectedKinds": ["local", "proxy", "target"],
+    "expectedProxy": "127.0.0.1:1080",
+    "expectedTransport": "targetSocks"
+  },
+  {
+    "name": "jump priority with jump socks",
+    "target": "target",
+    "connections": [
+      {
+        "name": "target",
+        "host": "10.0.0.1",
+        "username": "root",
+        "privateKey": "~/.ssh/id_ed25519",
+        "jumpHost": "jump",
+        "socksProxy": "socks5://ignored:1080"
+      },
+      {
+        "name": "jump",
+        "host": "10.0.0.2",
+        "username": "ops",
+        "privateKey": "~/.ssh/id_ed25519",
+        "socksProxy": "socks5://127.0.0.1:2080"
+      }
+    ],
+    "expectedKinds": ["local", "proxy", "jump", "target"],
+    "expectedProxy": "127.0.0.1:2080",
+    "expectedTransport": "jump",
+    "expectedJumpTransport": "targetSocks"
+  }
+]

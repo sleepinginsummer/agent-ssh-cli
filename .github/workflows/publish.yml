@@ -67,6 +67,9 @@ jobs:
       - run: node scripts/check-cfg-ports.js
       - run: npm install --package-lock-only --omit=optional --ignore-scripts
       - run: cargo build --release --manifest-path native/Cargo.toml --target ${{ matrix.target }}
+      - name: Test Windows atomic replacement
+        if: runner.os == 'Windows'
+        run: cargo test --manifest-path native/Cargo.toml --target ${{ matrix.target }} config::editor_transaction::tests::replace_file_overwrites_existing_destination
       - run: node scripts/build-native-bin.js
         env:
           TARGET: ${{ matrix.target }}

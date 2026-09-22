@@ -1,6 +1,6 @@
 ---
 name: agent-ssh-cli
-description: 使用基于 SSH 的 CLI 安全操作已配置的远端服务器。适用于需要列出连接、远程执行命令、上传文件、下载文件，以及确认参数、返回值、配置文件位置和环境校验步骤的场景。
+description: 使用基于 SSH 的 CLI 安全操作远端服务器并管理本地连接配置。适用于列出连接、远程执行命令、上传下载文件、启动或停止可视化配置编辑器，以及确认参数、返回值、配置路径和环境校验步骤的场景。
 ---
 
 # agent-ssh-cli 使用说明
@@ -15,6 +15,7 @@ description: 使用基于 SSH 的 CLI 安全操作已配置的远端服务器。
 - 从远端服务器下载文件到本地
 - 通过命令黑白名单限制可执行命令
 - 通过 Rust daemon 短时间缓存 SSH 连接，减少连续操作时的重复连接开销
+- 通过仅监听本机回环地址的可视化编辑器管理连接、凭据引用和安全策略
 - npm 安装会按当前系统自动拉取对应平台的 optional 预编译包，当前支持 macOS arm64/x64、Linux x64/arm64、Windows x64
 
 它不做的事：
@@ -87,7 +88,37 @@ mkdir -p ~/.agent-ssh-cli
 ~/.agent-ssh-cli/config.json
 ```
 
-为防止配置文件中的密码泄露，密码认证会在第一次使用该服务器时被动加密保存：如果目标连接的 `password` 是非空明文，下一次执行 `exec`、`upload` 或 `download` 连接该服务器前，CLI 会把密码加密写入配置目录的 `secrets.json`，生成本地 `secret.key`，并把 `config.json` 中该连接改成 `password: ""` 加 `passwordRef`。改密码时直接把空的 `password` 重新填成新密码，下一次连接会自动覆盖旧密文。私钥认证不参与这个流程。
+推荐通过 `agentsshcli edit-config` 替换密码：编辑器保存时会把新密码加密写入 `secrets.json`，配置文件只保留 `passwordRef`。旧配置仍支持被动迁移：若连接包含非空明文 `password`，下一次执行 `exec`、`upload` 或 `download` 时会生成 `secret.key`、加密保存密码，并把明文字段替换为引用。不要在对话、日志或命令输出中展示明文密码。
+
+## edit-config / stop-editor
+
+使用本机可视化编辑器管理 SSH 连接：
+
+```bash
+agentsshcli edit-config [--config <path>]
+agentsshcli stop-editor [--config <path>]
+```
+
+调用规则：
+
+- 用户要求打开、编辑或可视化管理 SSH 配置时，直接运行 `edit-config`；不要自行调用内部 `__editor` 子命令或拼装 HTTP API。
+- 编辑器只监听 `127.0.0.1`，启动后自动打开浏览器。同一配置路径只运行一个实例；重复执行会打开已有实例。
+- CLI 输出的本地 URL fragment 含临时 token，应按凭据处理，不写入日志、工单或对外消息；只有用户明确需要手动访问地址时才在当前本地会话中提供。
+- 连续 10 分钟没有经过认证的有效 API 或真实 `pointerdown`、`keydown`、`input` 时，编辑器自动退出并删除状态文件。页面失效后重新运行 `edit-config`。
+- `stop-editor` 只停止该配置对应的本地编辑器，不会停止 SSH daemon、缓存连接或远端任务。
+- 不要在用户可能仍有未保存页面修改时自行执行 `stop-editor`；仅在用户明确要求停止或已确认可以放弃未保存内容时调用。
+- `edit-config` / `stop-editor` 支持 `--config`、`--help` 和 `--version`，不接受 `--no-cache`、`--cache-ttl` 或位置参数。
+- 配置文件可能被其它进程修改；保存返回冲突时先重新载入，不得绕过 hash 检查或直接覆盖。
+- JSON 面板支持“全局 / 当前连接”和“预览 / 源码”；后端校验是最终配置契约，前端提示不能替代保存结果。
+- 查看密码会由本机后端解密，明文只在页面短暂显示并于 15 秒后清除；不要通过终端、脚本或 HTTP 调试接口提取密码。
+- 替换密码应使用页面的替换操作；保存后 `config.json` 只保留 `passwordRef`，密文写入同目录的 `secrets.json`。复制连接不会复制密码引用。
+- 编辑器不显示连接级 PTY 控件，但会透传已有 `pty`；执行命令时继续使用 `exec --pty` / `--no-pty` 临时覆盖。
+
+返回行为：
+
+- `edit-config` 成功时 stdout 输出 `配置编辑器已打开: <local-url>`，退出码为 `0`。浏览器打开失败时错误信息包含可手动访问的本地 URL。
+- `stop-editor` 成功时 stdout 输出 `配置编辑器已停止`；没有对应服务时返回 `配置编辑器未运行`，退出码为 `1`。
+- 编辑器保存冲突、配置校验失败或凭据引用不完整时，不应改写原配置；根据页面或 stderr 的具体错误处理。
 
 隐藏后的密码配置示例：
 
@@ -417,6 +448,8 @@ agentsshcli help list
 agentsshcli help exec
 agentsshcli help upload
 agentsshcli help download
+agentsshcli help edit-config
+agentsshcli help stop-editor
 agentsshcli --version
 ```
 
@@ -432,6 +465,8 @@ agentsshcli --version
 - `--no-cache` 和 `--cache-ttl` 必须放在 `exec`、`upload`、`download` 后、连接名或 `--connection` 前
 - `timeout` 和 `cache-ttl` 必须是正整数毫秒值
 - `list` 不接受位置参数
+- `edit-config` / `stop-editor` 不接受 `--no-cache`、`--cache-ttl` 或位置参数；选择配置文件只使用 `--config <path>`
+- 编辑器 URL token 只用于当前本机页面，不得作为普通文本记录或发送到外部系统
 - `upload` / `download` 的本地路径按传入路径解析，不再限制在当前工作目录、项目目录或 `allowedLocalPaths` 内
 - 出现 `启动 SSH 缓存进程失败` 通常表示本地 Rust daemon 或其 socket 启动/握手失败；如需绕过缓存验证远端命令，应在子命令后添加 `--no-cache`
 - 所有失败统一在 stderr 输出错误信息，退出码为 `1`

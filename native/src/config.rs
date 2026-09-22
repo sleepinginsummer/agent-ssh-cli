@@ -1,5 +1,6 @@
 // 配置与凭据：连接配置读写与校验、secret 密钥库、明文凭据迁移、配置快照与命令黑白名单。
 
+mod editor_transaction;
 use crate::privilege::{credential_fields, validate_unix_username, PrivilegeMode};
 use crate::{AppError, AppResult};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -14,6 +15,8 @@ use std::env;
 use std::fs::{self, File, OpenOptions};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -368,11 +371,7 @@ fn validate_optional_refs(entry: &RawConnection, index: usize, name: &str) -> Ap
 }
 
 fn normalize_privilege(entry: &RawConnection, index: usize) -> AppResult<NormalizedPrivilege> {
-    let non_blank = |value: &Option<String>| {
-        value
-            .clone()
-            .filter(|item| !item.trim().is_empty())
-    };
+    let non_blank = |value: &Option<String>| value.clone().filter(|item| !item.trim().is_empty());
     Ok(NormalizedPrivilege {
         enabled: entry.privilege_enabled.unwrap_or(false),
         sudo_user: normalize_privilege_user(entry.sudo_user.clone(), "root", "sudoUser", index)?,
@@ -384,10 +383,7 @@ fn normalize_privilege(entry: &RawConnection, index: usize) -> AppResult<Normali
     })
 }
 
-pub(crate) fn load_config(config_path: &Path) -> AppResult<Vec<Connection>> {
-    let raw = fs::read_to_string(config_path)?;
-    let parsed: Vec<RawConnection> = serde_json::from_str(&raw)
-        .map_err(|error| AppError::new(format!("ssh-config.json 解析失败: {}", error)))?;
+fn normalize_connections(parsed: Vec<RawConnection>) -> AppResult<Vec<Connection>> {
     if parsed.is_empty() {
         return Err(AppError::new("ssh-config.json 不能为空"));
     }
@@ -405,7 +401,15 @@ pub(crate) fn load_config(config_path: &Path) -> AppResult<Vec<Connection>> {
             )));
         }
     }
+    validate_jump_hosts(&configs)?;
     Ok(configs)
+}
+
+pub(crate) fn load_config(config_path: &Path) -> AppResult<Vec<Connection>> {
+    let raw = fs::read_to_string(config_path)?;
+    let parsed: Vec<RawConnection> = serde_json::from_str(&raw)
+        .map_err(|error| AppError::new(format!("ssh-config.json 解析失败: {}", error)))?;
+    normalize_connections(parsed)
 }
 
 pub(crate) fn load_config_for_connection(
@@ -613,6 +617,55 @@ fn save_secrets(config_path: &Path, secrets: &SecretsFile) -> AppResult<()> {
     write_private_file(&path, &raw)
 }
 
+#[cfg(windows)]
+#[link(name = "kernel32")]
+extern "system" {
+    #[link_name = "ReplaceFileW"]
+    fn replace_file_w(
+        replaced_file_name: *const u16,
+        replacement_file_name: *const u16,
+        backup_file_name: *const u16,
+        replace_flags: u32,
+        exclude: *mut std::ffi::c_void,
+        reserved: *mut std::ffi::c_void,
+    ) -> i32;
+}
+
+#[cfg(unix)]
+fn replace_file(temp: &Path, destination: &Path) -> AppResult<()> {
+    fs::rename(temp, destination)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn replace_file(temp: &Path, destination: &Path) -> AppResult<()> {
+    if !destination.exists() {
+        fs::rename(temp, destination)?;
+        return Ok(());
+    }
+    let destination_wide: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let temp_wide: Vec<u16> = temp.as_os_str().encode_wide().chain(Some(0)).collect();
+    // ReplaceFileW 在目标存在时原子替换，避免 remove + rename 留下无目标文件的崩溃窗口。
+    // SAFETY: 两个路径均编码为以 NUL 结尾的 UTF-16，并在调用期间保持存活。
+    let replaced = unsafe {
+        replace_file_w(
+            destination_wide.as_ptr(),
+            temp_wide.as_ptr(),
+            std::ptr::null(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if replaced == 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(())
+}
 fn write_private_file(path: &Path, bytes: &[u8]) -> AppResult<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -621,27 +674,21 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> AppResult<()> {
     fs::write(&tmp, bytes)?;
     #[cfg(unix)]
     fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
-    fs::rename(tmp, path)?;
+    replace_file(&tmp, path)?;
     Ok(())
 }
 
-fn encrypt_password(config_path: &Path, password_ref: &str, password: &str) -> AppResult<()> {
-    let key = load_or_create_secret_key(config_path)?;
-    let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
+fn encrypted_secret_item(key: &[u8; 32], password: &str) -> AppResult<SecretItem> {
+    let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
     let mut nonce_bytes = [0_u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
     let ciphertext = cipher
         .encrypt(Nonce::from_slice(&nonce_bytes), password.as_bytes())
         .map_err(|_| AppError::new("加密密码失败"))?;
-    let mut secrets = load_secrets(config_path)?;
-    secrets.items.insert(
-        password_ref.to_string(),
-        SecretItem {
-            nonce: BASE64_STANDARD.encode(nonce_bytes),
-            ciphertext: BASE64_STANDARD.encode(ciphertext),
-        },
-    );
-    save_secrets(config_path, &secrets)
+    Ok(SecretItem {
+        nonce: BASE64_STANDARD.encode(nonce_bytes),
+        ciphertext: BASE64_STANDARD.encode(ciphertext),
+    })
 }
 
 fn decrypt_password(config_path: &Path, password_ref: &str) -> AppResult<String> {
@@ -667,6 +714,23 @@ fn decrypt_password(config_path: &Path, password_ref: &str) -> AppResult<String>
         .map_err(|_| AppError::new(format!("解密本地密码失败: {}", password_ref)))?;
     String::from_utf8(plaintext)
         .map_err(|error| AppError::new(format!("本地密码编码非法: {}", error)))
+}
+
+pub(crate) fn reveal_connection_secret(
+    config_path: &Path,
+    connection_name: &str,
+    kind: &str,
+) -> AppResult<String> {
+    if kind != "password" {
+        return Err(AppError::new("不支持的 secret 类型"));
+    }
+    let configs = load_config(config_path)?;
+    let connection = find_connection(&configs, connection_name)?;
+    let password_ref = connection
+        .password_ref
+        .as_deref()
+        .ok_or_else(|| AppError::new(format!("连接 {} 未配置 passwordRef", connection_name)))?;
+    decrypt_password(config_path, password_ref)
 }
 
 pub(crate) fn resolve_password_ref_for_connection(
@@ -770,6 +834,43 @@ fn password_ref_for(connection_name: &str) -> String {
     format!("{}{}", PASSWORD_REF_PREFIX, connection_name)
 }
 
+// 只修改调用方提供的内存对象；锁和文件提交由各自事务边界负责。
+fn migrate_credential_in_memory(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    password_field: &str,
+    password_ref_field: &str,
+    default_password_ref: &str,
+    key: &[u8; 32],
+    secrets: &mut SecretsFile,
+) -> AppResult<bool> {
+    let Some(password) = object
+        .get(password_field)
+        .and_then(|item| item.as_str())
+        .filter(|item| !item.trim().is_empty())
+        .map(ToString::to_string)
+    else {
+        return Ok(false);
+    };
+    let password_ref = object
+        .get(password_ref_field)
+        .and_then(|item| item.as_str())
+        .filter(|item| !item.trim().is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| default_password_ref.to_string());
+    secrets
+        .items
+        .insert(password_ref.clone(), encrypted_secret_item(key, &password)?);
+    object.insert(
+        password_field.to_string(),
+        serde_json::Value::String(String::new()),
+    );
+    object.insert(
+        password_ref_field.to_string(),
+        serde_json::Value::String(password_ref),
+    );
+    Ok(true)
+}
+
 fn migrate_plain_credential_for_connection(
     config_path: &Path,
     connection_name: &str,
@@ -781,44 +882,40 @@ fn migrate_plain_credential_for_connection(
     let raw = fs::read_to_string(config_path)?;
     let mut values: Vec<serde_json::Value> = serde_json::from_str(&raw)
         .map_err(|error| AppError::new(format!("ssh-config.json 解析失败: {}", error)))?;
-    let mut migrated = false;
-    for (index, value) in values.iter_mut().enumerate() {
-        let object = value.as_object_mut().ok_or_else(|| {
+    let mut target_index = None;
+    for (index, value) in values.iter().enumerate() {
+        let object = value.as_object().ok_or_else(|| {
             AppError::new(format!("ssh-config.json 第 {} 项必须是对象", index + 1))
         })?;
-        let name = object
-            .get("name")
-            .and_then(|item| item.as_str())
-            .unwrap_or_default();
-        if name != connection_name {
-            continue;
+        if object.get("name").and_then(|item| item.as_str()) == Some(connection_name) {
+            target_index = Some(index);
+            break;
         }
-        let Some(password) = object.get(password_field).and_then(|item| item.as_str()) else {
-            return Ok(false);
-        };
-        if password.trim().is_empty() {
-            return Ok(false);
-        }
-        let password = password.to_string();
-        let password_ref = object
-            .get(password_ref_field)
-            .and_then(|item| item.as_str())
-            .filter(|item| !item.trim().is_empty())
-            .map(ToString::to_string)
-            .unwrap_or_else(|| default_password_ref.to_string());
-        encrypt_password(config_path, &password_ref, &password)?;
-        object.insert(
-            password_field.to_string(),
-            serde_json::Value::String(String::new()),
-        );
-        object.insert(
-            password_ref_field.to_string(),
-            serde_json::Value::String(password_ref),
-        );
-        migrated = true;
-        break;
     }
+    let Some(target_index) = target_index else {
+        return Ok(false);
+    };
+    let has_password = values[target_index]
+        .as_object()
+        .and_then(|object| object.get(password_field))
+        .and_then(|item| item.as_str())
+        .is_some_and(|item| !item.trim().is_empty());
+    if !has_password {
+        return Ok(false);
+    }
+
+    let key = load_or_create_secret_key(config_path)?;
+    let mut secrets = load_secrets(config_path)?;
+    let migrated = migrate_credential_in_memory(
+        values[target_index].as_object_mut().expect("已校验为对象"),
+        password_field,
+        password_ref_field,
+        default_password_ref,
+        &key,
+        &mut secrets,
+    )?;
     if migrated {
+        save_secrets(config_path, &secrets)?;
         write_config_values(config_path, &values)?;
     }
     Ok(migrated)
@@ -841,20 +938,299 @@ fn write_config_values(config_path: &Path, values: &[serde_json::Value]) -> AppR
     let raw = serde_json::to_vec_pretty(values)?;
     let tmp = config_path.with_extension("tmp");
     fs::write(&tmp, raw)?;
-    fs::rename(tmp, config_path)?;
+    replace_file(&tmp, config_path)?;
     Ok(())
 }
 
-pub(crate) fn prepare_connection_config(config_path: &Path, connection_name: &str) -> AppResult<()> {
+pub(crate) fn prepare_editor_config(config_path: &Path) -> AppResult<()> {
+    let _lock = MigrationLock::acquire(config_path)?;
+    editor_transaction::recover_locked(config_path, &secrets_path(config_path)?)?;
+    let raw = fs::read_to_string(config_path)?;
+    let mut values: Vec<serde_json::Value> = serde_json::from_str(&raw)
+        .map_err(|error| AppError::new(format!("ssh-config.json 解析失败: {}", error)))?;
+    let requires_migration = values.iter().any(|value| {
+        value.as_object().is_some_and(|object| {
+            ["password", "sudoPassword", "suPassword"]
+                .iter()
+                .any(|field| {
+                    object
+                        .get(*field)
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|value| !value.trim().is_empty())
+                })
+        })
+    });
+    if !requires_migration {
+        let parsed: Vec<RawConnection> = serde_json::from_value(serde_json::Value::Array(values))?;
+        let _ = normalize_connections(parsed)?;
+        return Ok(());
+    }
+
+    let key = load_or_create_secret_key(config_path)?;
+    let mut secrets = load_secrets(config_path)?;
+    for (index, value) in values.iter_mut().enumerate() {
+        let object = value.as_object_mut().ok_or_else(|| {
+            AppError::new(format!("ssh-config.json 第 {} 项必须是对象", index + 1))
+        })?;
+        let name = object
+            .get("name")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| AppError::new(format!("ssh-config.json 第 {} 项缺少 name", index + 1)))?
+            .to_string();
+        migrate_credential_in_memory(
+            object,
+            "password",
+            "passwordRef",
+            &password_ref_for(&name),
+            &key,
+            &mut secrets,
+        )?;
+        for mode in [PrivilegeMode::Sudo, PrivilegeMode::Su] {
+            let fields = credential_fields(mode);
+            let default_ref = format!("{}{}{}", PASSWORD_REF_PREFIX, name, fields.reference_suffix);
+            migrate_credential_in_memory(
+                object,
+                fields.password,
+                fields.password_ref,
+                &default_ref,
+                &key,
+                &mut secrets,
+            )?;
+        }
+    }
+    let parsed: Vec<RawConnection> =
+        serde_json::from_value(serde_json::Value::Array(values.clone()))?;
+    let _ = normalize_connections(parsed)?;
+    editor_transaction::commit(
+        config_path,
+        &serde_json::to_vec_pretty(&values)?,
+        &secrets_path(config_path)?,
+        &serde_json::to_vec_pretty(&secrets)?,
+    )
+}
+
+pub(crate) struct EditorConfigDocument {
+    pub(crate) connections: serde_json::Value,
+    pub(crate) hash: String,
+}
+
+pub(crate) fn read_editor_config(config_path: &Path) -> AppResult<EditorConfigDocument> {
+    let _lock = MigrationLock::acquire(config_path)?;
+    editor_transaction::recover_locked(config_path, &secrets_path(config_path)?)?;
+    let raw = fs::read(config_path)?;
+    let parsed: Vec<RawConnection> = serde_json::from_slice(&raw)
+        .map_err(|error| AppError::new(format!("ssh-config.json 解析失败: {}", error)))?;
+    let _ = normalize_connections(parsed)?;
+    let mut connections: serde_json::Value = serde_json::from_slice(&raw)
+        .map_err(|error| AppError::new(format!("ssh-config.json 解析失败: {}", error)))?;
+    let items = connections
+        .as_array_mut()
+        .ok_or_else(|| AppError::new("ssh-config.json 根节点必须是数组"))?;
+    for item in items {
+        let object = item
+            .as_object_mut()
+            .ok_or_else(|| AppError::new("ssh-config.json 连接项必须是对象"))?;
+        object.remove("password");
+        object.remove("sudoPassword");
+        object.remove("suPassword");
+    }
+    Ok(EditorConfigDocument {
+        connections,
+        hash: hash_bytes(&raw),
+    })
+}
+
+#[derive(Debug)]
+pub(crate) enum SaveEditorError {
+    Conflict,
+    App(AppError),
+}
+
+impl std::fmt::Display for SaveEditorError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Conflict => formatter.write_str("配置文件已被其他进程修改，请重新载入后再保存"),
+            Self::App(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for SaveEditorError {}
+
+impl From<AppError> for SaveEditorError {
+    fn from(error: AppError) -> Self {
+        Self::App(error)
+    }
+}
+
+impl From<std::io::Error> for SaveEditorError {
+    fn from(error: std::io::Error) -> Self {
+        Self::App(error.into())
+    }
+}
+
+impl From<serde_json::Error> for SaveEditorError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::App(error.into())
+    }
+}
+
+fn validate_editor_connections(
+    connections: &serde_json::Value,
+) -> AppResult<(Vec<Connection>, HashMap<String, usize>)> {
+    let values = connections
+        .as_array()
+        .ok_or_else(|| AppError::new("配置根节点必须是非空数组"))?;
+    for (index, value) in values.iter().enumerate() {
+        let object = value
+            .as_object()
+            .ok_or_else(|| AppError::new(format!("第 {} 个连接必须是对象", index + 1)))?;
+        for field in ["password", "sudoPassword", "suPassword"] {
+            if object.contains_key(field) {
+                return Err(AppError::new(format!(
+                    "编辑器配置不得包含明文字段 {}",
+                    field
+                )));
+            }
+        }
+    }
+
+    let parsed: Vec<RawConnection> = serde_json::from_value(connections.clone())
+        .map_err(|error| AppError::new(format!("配置校验失败: {}", error)))?;
+    let normalized = normalize_connections(parsed)?;
+    let mut reference_counts: HashMap<String, usize> = HashMap::new();
+    for connection in &normalized {
+        for password_ref in [
+            connection.password_ref.as_deref(),
+            connection.sudo_password_ref.as_deref(),
+            connection.su_password_ref.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            *reference_counts
+                .entry(password_ref.to_string())
+                .or_default() += 1;
+        }
+    }
+    Ok((normalized, reference_counts))
+}
+
+fn prepare_password_updates(
+    config_path: &Path,
+    connections: &[Connection],
+    reference_counts: &HashMap<String, usize>,
+    password_updates: &[(String, String)],
+) -> AppResult<SecretsFile> {
+    let mut prepared_updates = Vec::with_capacity(password_updates.len());
+    let mut updated_references = HashSet::new();
+    for (connection_name, password) in password_updates {
+        if password.is_empty() {
+            return Err(AppError::new(format!(
+                "连接 {} 的新密码不能为空",
+                connection_name
+            )));
+        }
+        let connection = find_connection(connections, connection_name)?;
+        let password_ref = connection
+            .password_ref
+            .as_deref()
+            .ok_or_else(|| AppError::new(format!("连接 {} 未配置 passwordRef", connection_name)))?;
+        if reference_counts
+            .get(password_ref)
+            .copied()
+            .unwrap_or_default()
+            > 1
+        {
+            return Err(AppError::new(format!(
+                "密码引用 {} 被多个字段共享，拒绝通过编辑器替换",
+                password_ref
+            )));
+        }
+        if !updated_references.insert(password_ref.to_string()) {
+            return Err(AppError::new(format!(
+                "密码引用 {} 在同一次保存中重复更新",
+                password_ref
+            )));
+        }
+        prepared_updates.push((password_ref.to_string(), password.as_str()));
+    }
+
+    let mut secrets = load_secrets(config_path)?;
+    for password_ref in reference_counts.keys() {
+        if !secrets.items.contains_key(password_ref) && !updated_references.contains(password_ref) {
+            return Err(AppError::new(format!(
+                "密码引用 {} 在 secrets.json 中不存在",
+                password_ref
+            )));
+        }
+    }
+    if !prepared_updates.is_empty() {
+        let key = load_or_create_secret_key(config_path)?;
+        for (password_ref, password) in prepared_updates {
+            secrets
+                .items
+                .insert(password_ref, encrypted_secret_item(&key, password)?);
+        }
+    }
+    Ok(secrets)
+}
+
+pub(crate) fn save_editor_config(
+    config_path: &Path,
+    connections: serde_json::Value,
+    expected_hash: &str,
+    password_updates: &[(String, String)],
+) -> Result<String, SaveEditorError> {
+    let _lock = MigrationLock::acquire(config_path)?;
+    editor_transaction::recover_locked(config_path, &secrets_path(config_path)?)?;
+    let current_hash = hash_file(config_path)?;
+    if current_hash != expected_hash {
+        return Err(SaveEditorError::Conflict);
+    }
+    let values = connections
+        .as_array()
+        .ok_or_else(|| AppError::new("配置根节点必须是非空数组"))?;
+    let (normalized, reference_counts) = validate_editor_connections(&connections)?;
+    let secrets = prepare_password_updates(
+        config_path,
+        &normalized,
+        &reference_counts,
+        password_updates,
+    )?;
+
+    if password_updates.is_empty() {
+        write_config_values(config_path, values)?;
+    } else {
+        let config_bytes = serde_json::to_vec_pretty(values)?;
+        let secret_bytes = serde_json::to_vec_pretty(&secrets)?;
+        editor_transaction::commit(
+            config_path,
+            &config_bytes,
+            &secrets_path(config_path)?,
+            &secret_bytes,
+        )?;
+    }
+    Ok(hash_file(config_path)?)
+}
+
+pub(crate) fn prepare_connection_config(
+    config_path: &Path,
+    connection_name: &str,
+) -> AppResult<()> {
     let _ = migrate_plain_password_for_connection(config_path, connection_name)?;
     Ok(())
 }
 
 fn hash_file(path: &Path) -> AppResult<String> {
-    let bytes = fs::read(path)?;
+    Ok(hash_bytes(&fs::read(path)?))
+}
+
+fn hash_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    Ok(format!("{:x}", hasher.finalize()))
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -930,13 +1306,11 @@ pub(crate) fn resolve_pty(connection: &Connection, override_pty: Option<bool>) -
     override_pty.or(connection.pty).unwrap_or(false)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::write_config;
     use std::time::Duration;
-
 
     #[test]
     fn load_config_validates_duplicate_names() {
@@ -1088,6 +1462,113 @@ mod tests {
         .unwrap();
         let changed = ConfigSnapshot::read(&path).unwrap();
         assert_ne!(snapshot.hash, changed.hash);
+    }
+    #[test]
+    fn prepare_editor_config_migrates_all_credentials_without_plaintext() {
+        let (_dir, path) = write_config(
+            r#"[{"name":"server","host":"127.0.0.1","username":"root","password":"ssh-secret","privilegeEnabled":true,"sudoPassword":"sudo-secret","suPassword":"su-secret"}]"#,
+        );
+
+        prepare_editor_config(&path).unwrap();
+
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("ssh-secret"));
+        assert!(!raw.contains("sudo-secret"));
+        assert!(!raw.contains("su-secret"));
+        assert_eq!(
+            decrypt_password(&path, "agentsshcli:server").unwrap(),
+            "ssh-secret"
+        );
+        assert_eq!(
+            decrypt_password(&path, "agentsshcli:server:sudo").unwrap(),
+            "sudo-secret"
+        );
+        assert_eq!(
+            decrypt_password(&path, "agentsshcli:server:su").unwrap(),
+            "su-secret"
+        );
+    }
+
+    #[derive(serde::Deserialize)]
+    struct EditorContractCase {
+        name: String,
+        valid: bool,
+        connections: serde_json::Value,
+    }
+
+    #[test]
+    fn editor_contract_cases_match_rust_validation() {
+        let cases: Vec<EditorContractCase> =
+            serde_json::from_str(include_str!("../web/editor-contract-cases.json")).unwrap();
+        for test_case in cases {
+            let actual = serde_json::from_value::<Vec<RawConnection>>(test_case.connections)
+                .map_err(AppError::from)
+                .and_then(normalize_connections)
+                .is_ok();
+            assert_eq!(actual, test_case.valid, "{}", test_case.name);
+        }
+    }
+
+    #[test]
+    fn save_editor_config_updates_secret_without_exposing_it_in_config() {
+        let (_dir, path) = write_config(
+            r#"[{"name":"server","host":"127.0.0.1","username":"root","password":"old-secret"}]"#,
+        );
+        prepare_editor_config(&path).unwrap();
+        let document = read_editor_config(&path).unwrap();
+
+        let hash = save_editor_config(
+            &path,
+            document.connections,
+            &document.hash,
+            &[("server".to_string(), "new-secret".to_string())],
+        )
+        .unwrap();
+
+        assert_eq!(hash, hash_file(&path).unwrap());
+        assert_eq!(
+            reveal_connection_secret(&path, "server", "password").unwrap(),
+            "new-secret"
+        );
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("old-secret"));
+        assert!(!raw.contains("new-secret"));
+        assert!(!raw.contains(r#""password""#));
+    }
+
+    #[test]
+    fn save_editor_config_rejects_dangling_password_reference() {
+        let (_dir, path) = write_config(
+            r#"[{"name":"server","host":"127.0.0.1","username":"root","passwordRef":"agentsshcli:missing"}]"#,
+        );
+        let document = read_editor_config(&path).unwrap();
+        let error =
+            save_editor_config(&path, document.connections, &document.hash, &[]).unwrap_err();
+        assert!(error.to_string().contains("在 secrets.json 中不存在"));
+    }
+
+    #[test]
+    fn save_editor_config_rejects_updates_to_shared_password_reference() {
+        let (_dir, path) = write_config(
+            r#"[{"name":"a","host":"127.0.0.1","username":"root","password":"secret"}]"#,
+        );
+        prepare_editor_config(&path).unwrap();
+        let document = read_editor_config(&path).unwrap();
+        let mut connections = document.connections.as_array().unwrap().clone();
+        connections.push(serde_json::json!({
+            "name": "b",
+            "host": "127.0.0.2",
+            "username": "root",
+            "passwordRef": "agentsshcli:a"
+        }));
+        let error = save_editor_config(
+            &path,
+            serde_json::Value::Array(connections),
+            &document.hash,
+            &[("a".to_string(), "new-secret".to_string())],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("被多个字段共享"));
     }
 
     #[test]

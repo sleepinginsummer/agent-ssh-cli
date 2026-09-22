@@ -12,7 +12,7 @@
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white" alt="Node.js >=18"></a>
   <a href="https://www.npmjs.com/"><img src="https://img.shields.io/badge/npm-%3E%3D8-CB3837?logo=npm&logoColor=white" alt="npm >=8"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli"><img src="https://img.shields.io/badge/sys-win%2Fmac%2Flinux-0078D6" alt="sys win/mac/linux"></a>
-  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.5.7-blue" alt="release v0.5.7"></a>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.6.0-blue" alt="release v0.6.0"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
 </p>
 
@@ -68,6 +68,8 @@
 - 下载支持断点续传：中断后本地保留 `.part` 文件，下次自动从断点继续
 - `exec` / `upload` / `download --json`: 输出结构化 JSON（`exitCode`/`stdout`/`stderr`），`exitCode` 为远端命令真实退出码，便于脚本和 AI 解析
 - `agentsshcli init-config`: 生成默认配置文件到 `~/.agent-ssh-cli/config.json`
+- `agentsshcli edit-config [--config <path>]`: 启动仅监听 `127.0.0.1` 的可视化配置编辑器并打开浏览器
+- `agentsshcli stop-editor [--config <path>]`: 停止当前配置对应的编辑器服务
 - `agentsshcli stop-daemon`: 停止当前配置对应的 SSH 缓存进程
 - 远端会话异常终止时提示 `[remote] 会话异常终止（无退出状态）`，不会静默返回成功
 
@@ -122,9 +124,40 @@ AGENT_SSH_CONFIG=/path/to/config.json
 
 完整示例见 [example.config.json](example.config.json)。`~/.agent-ssh-cli/config.json` 保存真实连接信息。
 
-为防止配置文件中的密码泄露，密码认证会在第一次使用该服务器时被动加密保存：首次写入明文 `password` 后，执行 `exec`、`upload` 或 `download` 连接该服务器时，CLI 会把密码加密保存到配置目录下的 `secrets.json`，生成本地 `secret.key`，并把配置中的 `password` 置空、写入 `passwordRef`。后续运行通过 `passwordRef` 解密认证；如需修改密码，把空的 `password` 重新填成新密码，下次连接会自动覆盖旧密文。
+推荐使用可视化配置编辑器管理连接和替换密码：运行 `agentsshcli edit-config`，在浏览器中修改后保存。新密码会加密写入配置目录下的 `secrets.json`，`config.json` 只保留 `passwordRef`。页面查看已保存密码时，明文由本机后端解密，只在页面短暂显示并于 15 秒后清除。
 
-sudo/su 明文凭据也采用相同的被动迁移规则，但仅在首次使用对应 flag 时迁移，密文 key 分别为 `agentsshcli:<name>:sudo` 和 `agentsshcli:<name>:su`。提权必须显式设置 `privilegeEnabled: true`；默认关闭时，即使配置了凭据也会拒绝 `--sudo/--su`。
+为兼容旧配置，CLI 仍支持明文凭据的被动迁移：首次写入 `password` 后，执行 `exec`、`upload` 或 `download` 连接该服务器时，会生成本地 `secret.key`，把密码加密保存到 `secrets.json`，并将配置中的明文字段替换为 `passwordRef`。sudo/su 明文凭据采用相同规则，但只在首次使用对应 flag 时迁移，密文 key 分别为 `agentsshcli:<name>:sudo` 和 `agentsshcli:<name>:su`。提权必须显式设置 `privilegeEnabled: true`。
+
+### 可视化配置编辑器
+
+启动默认配置对应的编辑器：
+
+```bash
+agentsshcli edit-config
+```
+
+指定配置文件：
+
+```bash
+agentsshcli edit-config --config /path/to/config.json
+```
+
+停止对应配置文件的编辑器服务：
+
+```bash
+agentsshcli stop-editor --config /path/to/config.json
+```
+
+编辑器行为：
+
+- HTTP 服务只监听 `127.0.0.1`，启动后自动打开浏览器；访问 URL 的 fragment 中包含临时 token，不要复制到日志、工单或发给其他人。
+- 同一配置文件只启动一个编辑器服务；再次运行 `edit-config` 会打开现有页面。
+- 连续 10 分钟没有经过认证的有效 API 或真实页面输入时，服务自动退出并清理状态文件；旧 URL 随即失效。
+- 后端负责最终配置校验和并发 hash 检查；配置被其他进程修改时保存返回冲突，需要重新载入后再编辑。
+- JSON 面板支持“全局 / 当前连接”以及“预览 / 源码”；源码应用前仍会经过与表单一致的配置校验。
+- 替换密码时只持久化加密后的 secret 和 `passwordRef`；复制连接不会复制密码引用或解密值。
+- 编辑器不提供连接级 PTY 开关，但会保留旧配置中的 `pty`；临时控制继续使用 `exec --pty` / `--no-pty`。
+- `stop-editor` 只停止本地配置编辑器，不会停止 SSH daemon、连接缓存或远端会话。
 
 参考配置
 

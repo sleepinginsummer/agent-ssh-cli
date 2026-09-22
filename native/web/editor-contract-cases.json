@@ -1,0 +1,59 @@
+[
+  {
+    "name": "省略端口时使用默认值",
+    "valid": true,
+    "connections": [
+      {
+        "name": "server",
+        "host": "127.0.0.1",
+        "username": "root",
+        "passwordRef": "agentsshcli:server",
+        "pty": true
+      }
+    ]
+  },
+  {
+    "name": "连接名称不能重复",
+    "valid": false,
+    "connections": [
+      {
+        "name": "server",
+        "host": "127.0.0.1",
+        "username": "root",
+        "passwordRef": "agentsshcli:server"
+      },
+      {
+        "name": "server",
+        "host": "127.0.0.2",
+        "username": "root",
+        "passwordRef": "agentsshcli:server-copy"
+      }
+    ]
+  },
+  {
+    "name": "跳板机引用必须存在",
+    "valid": false,
+    "connections": [
+      {
+        "name": "server",
+        "host": "127.0.0.1",
+        "username": "root",
+        "passwordRef": "agentsshcli:server",
+        "jumpHost": "missing"
+      }
+    ]
+  },
+  {
+    "name": "密码引用与私钥不能并存",
+    "valid": false,
+    "connections": [
+      {
+        "name": "server",
+        "host": "127.0.0.1",
+        "username": "root",
+        "passwordRef": "agentsshcli:server",
+        "privateKey": "~/.ssh/id_ed25519"
+      }
+    ]
+  }
+]

@@ -1,6 +1,6 @@
 {
   "name": "agent-ssh-cli",
-  "version": "0.5.7",
+  "version": "0.6.0",
   "description": "基于 CLI 的 SSH 代理工具，按 ssh-mcp-server 的能力一一映射",
   "type": "module",
   "engines": {
@@ -20,7 +20,7 @@
     "agentsshcli": "bin/agentsshcli.js"
   },
   "scripts": {
-    "test": "node --check bin/agentsshcli.js && node scripts/check-cfg-ports.js && cargo test --manifest-path native/Cargo.toml",
+    "test": "node --check bin/agentsshcli.js && node scripts/check-cfg-ports.js && node scripts/check-editor-contract.js && cargo test --manifest-path native/Cargo.toml",
     "build:native": "cargo build --release --manifest-path native/Cargo.toml",
     "test:native": "cargo test --manifest-path native/Cargo.toml",
     "build:native-bin": "node scripts/build-native-bin.js",
@@ -28,10 +28,10 @@
     "verify:published": "bash scripts/verify-published-packages.sh"
   },
   "optionalDependencies": {
-    "@agent-ssh-cli/darwin-arm64": "0.5.7",
-    "@agent-ssh-cli/darwin-x64": "0.5.7",
-    "@agent-ssh-cli/linux-arm64": "0.5.7",
-    "@agent-ssh-cli/linux-x64": "0.5.7",
-    "@agent-ssh-cli/win32-x64": "0.5.7"
+    "@agent-ssh-cli/darwin-arm64": "0.6.0",
+    "@agent-ssh-cli/darwin-x64": "0.6.0",
+    "@agent-ssh-cli/linux-arm64": "0.6.0",
+    "@agent-ssh-cli/linux-x64": "0.6.0",
+    "@agent-ssh-cli/win32-x64": "0.6.0"
   }
 }

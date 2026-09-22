@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod daemon;
+mod editor;
 mod exec;
 mod privilege;
 mod runtime;

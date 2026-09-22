@@ -2,8 +2,8 @@
 //
 // 与 `exec.rs` 的分工：本模块只负责把会话建好，命令执行与提权编排由 `exec.rs` 负责。
 
-use crate::{AppError, AppResult};
 use crate::config::{find_connection, Connection};
+use crate::{AppError, AppResult};
 
 use russh::keys::{load_secret_key, PrivateKeyWithHashAlg};
 use russh::{client, Preferred};
@@ -194,11 +194,58 @@ pub(crate) async fn connect_russh(
     connect_russh_over_stream(connection, stream).await
 }
 
-async fn connect_russh_direct(connection: &Connection) -> AppResult<client::Handle<RusshClient>> {
-    let stream: Box<dyn SshStream> = if connection.socks_proxy.is_some() {
-        Box::new(connect_socks_proxy(connection).await?)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectConnectionTransport {
+    Direct,
+    TargetSocks,
+}
+
+// 直连只考虑当前连接自身的 SOCKS5；用于跳板机时不会递归处理其 jumpHost。
+fn direct_connection_transport(connection: &Connection) -> DirectConnectionTransport {
+    if connection.socks_proxy.is_some() {
+        DirectConnectionTransport::TargetSocks
     } else {
-        Box::new(tokio::net::TcpStream::connect((connection.host.as_str(), connection.port)).await?)
+        DirectConnectionTransport::Direct
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ConnectionTransport<'a> {
+    Direct,
+    TargetSocks,
+    Jump {
+        connection: &'a Connection,
+        transport: DirectConnectionTransport,
+    },
+}
+
+// 目标 jumpHost 优先于目标 socksProxy，返回值同时驱动真实建连与共享契约测试。
+fn connection_transport<'a>(
+    configs: &'a [Connection],
+    connection: &Connection,
+) -> AppResult<ConnectionTransport<'a>> {
+    if let Some(jump_name) = connection.jump_host.as_deref() {
+        let jump = find_connection(configs, jump_name)?;
+        return Ok(ConnectionTransport::Jump {
+            connection: jump,
+            transport: direct_connection_transport(jump),
+        });
+    }
+    Ok(match direct_connection_transport(connection) {
+        DirectConnectionTransport::Direct => ConnectionTransport::Direct,
+        DirectConnectionTransport::TargetSocks => ConnectionTransport::TargetSocks,
+    })
+}
+
+async fn connect_russh_direct(
+    connection: &Connection,
+    transport: DirectConnectionTransport,
+) -> AppResult<client::Handle<RusshClient>> {
+    let stream: Box<dyn SshStream> = match transport {
+        DirectConnectionTransport::TargetSocks => Box::new(connect_socks_proxy(connection).await?),
+        DirectConnectionTransport::Direct => Box::new(
+            tokio::net::TcpStream::connect((connection.host.as_str(), connection.port)).await?,
+        ),
     };
     connect_russh_over_stream(connection, stream).await
 }
@@ -248,31 +295,33 @@ async fn open_connection_stream(
     configs: &[Connection],
     connection: &Connection,
 ) -> AppResult<Box<dyn SshStream>> {
-    if let Some(jump_name) = connection.jump_host.as_deref() {
-        let jump = find_connection(configs, jump_name)?;
-        let jump_session = connect_russh_direct(jump).await?;
-        let channel = jump_session
-            .channel_open_direct_tcpip(
-                connection.host.clone(),
-                u32::from(connection.port),
-                "127.0.0.1",
-                0,
-            )
-            .await
-            .map_err(|error| {
-                AppError::new(format!(
-                    "连接 {} 通过跳板机 {} 打开直连通道失败: {}",
-                    connection.name, jump.name, error
-                ))
-            })?;
-        return Ok(Box::new(channel.into_stream()));
+    match connection_transport(configs, connection)? {
+        ConnectionTransport::Jump {
+            connection: jump,
+            transport,
+        } => {
+            let jump_session = connect_russh_direct(jump, transport).await?;
+            let channel = jump_session
+                .channel_open_direct_tcpip(
+                    connection.host.clone(),
+                    u32::from(connection.port),
+                    "127.0.0.1",
+                    0,
+                )
+                .await
+                .map_err(|error| {
+                    AppError::new(format!(
+                        "连接 {} 通过跳板机 {} 打开直连通道失败: {}",
+                        connection.name, jump.name, error
+                    ))
+                })?;
+            Ok(Box::new(channel.into_stream()))
+        }
+        ConnectionTransport::TargetSocks => Ok(Box::new(connect_socks_proxy(connection).await?)),
+        ConnectionTransport::Direct => Ok(Box::new(
+            tokio::net::TcpStream::connect((connection.host.as_str(), connection.port)).await?,
+        )),
     }
-    if connection.socks_proxy.is_some() {
-        return Ok(Box::new(connect_socks_proxy(connection).await?));
-    }
-    Ok(Box::new(
-        tokio::net::TcpStream::connect((connection.host.as_str(), connection.port)).await?,
-    ))
 }
 
 async fn authenticate_russh(
@@ -336,6 +385,54 @@ async fn authenticate_russh(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::config::load_config;
+    use crate::test_support::write_config;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RouteCase {
+        name: String,
+        target: String,
+        connections: serde_json::Value,
+        expected_transport: String,
+        expected_jump_transport: Option<String>,
+    }
+
+    fn direct_transport_name(transport: DirectConnectionTransport) -> &'static str {
+        match transport {
+            DirectConnectionTransport::Direct => "direct",
+            DirectConnectionTransport::TargetSocks => "targetSocks",
+        }
+    }
+
+    #[test]
+    fn connection_transport_matches_shared_editor_contract() {
+        let cases: Vec<RouteCase> =
+            serde_json::from_str(include_str!("../testdata/editor-route-cases.json",)).unwrap();
+        for case in cases {
+            let raw = serde_json::to_string(&case.connections).unwrap();
+            let (_dir, path) = write_config(&raw);
+            let configs = load_config(&path).unwrap();
+            let target = find_connection(&configs, &case.target).unwrap();
+            let transport = connection_transport(&configs, target).unwrap();
+            let (actual, jump_transport) = match transport {
+                ConnectionTransport::Direct => ("direct", None),
+                ConnectionTransport::TargetSocks => ("targetSocks", None),
+                ConnectionTransport::Jump { transport, .. } => {
+                    ("jump", Some(direct_transport_name(transport)))
+                }
+            };
+            assert_eq!(actual, case.expected_transport, "{}", case.name);
+            assert_eq!(
+                jump_transport,
+                case.expected_jump_transport.as_deref(),
+                "{}",
+                case.name
+            );
+        }
+    }
 
     #[test]
     fn socks_proxy_supports_host_port_without_scheme() {
