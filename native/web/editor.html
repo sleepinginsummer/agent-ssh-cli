@@ -150,7 +150,7 @@
     input[aria-invalid="true"] { border-color: var(--danger); box-shadow: 0 0 0 2px var(--danger-soft); }
     .mono { font-family: var(--font-mono); font-size: 10px; }
     .error { min-height: 11px; margin-top: 3px; color: var(--danger); font: 8px var(--font-mono); }
-    .secret-control { display: grid; grid-template-columns: minmax(0, 1fr) 36px 36px; }
+    .secret-control { display: grid; grid-template-columns: minmax(0, 1fr) 36px; }
     .secret-control input { border-radius: 6px 0 0 6px; }
     .secret-control .icon-btn { width: 36px; min-height: 36px; border-left: 0; border-radius: 0; background: var(--surface); }
     .secret-control .icon-btn:last-child { border-radius: 0 6px 6px 0; }
@@ -321,7 +321,7 @@
           <button class="tab" type="button" role="tab" aria-selected="false" data-tab="policy">安全</button>
         </div>
 
-        <form class="form-scroll" id="form" novalidate>
+        <div class="form-scroll" id="form">
           <div class="tab-page active" data-page="connection">
             <section class="form-section">
               <div class="section-title"><h2>目标端点</h2></div>
@@ -329,7 +329,7 @@
                 <div class="field span-3"><label class="required" for="f-name">连接名称</label><input id="f-name" data-field="name" autocomplete="off"><div class="error" data-error="name" role="alert"></div></div>
                 <div class="field span-4"><label class="required" for="f-host">主机</label><input class="mono" id="f-host" data-field="host" autocomplete="off"><div class="error" data-error="host" role="alert"></div></div>
                 <div class="field span-2"><label class="required" for="f-port">端口</label><input class="mono" id="f-port" data-field="port" type="number" inputmode="numeric" min="1" max="65535"><div class="error" data-error="port" role="alert"></div></div>
-                <div class="field span-3"><label class="required" for="f-username">用户名</label><input class="mono" id="f-username" data-field="username" autocomplete="username"><div class="error" data-error="username" role="alert"></div></div>
+                <div class="field span-3"><label class="required" for="f-username">用户名</label><input class="mono" id="f-username" data-field="username" autocomplete="off"><div class="error" data-error="username" role="alert"></div></div>
               </div>
             </section>
 
@@ -346,7 +346,7 @@
               <div class="fields">
                 <div class="field span-3"><span class="label">认证方式</span><div class="mode-switch" aria-label="认证方式"><button class="active" type="button" data-auth="password">密码引用</button><button type="button" data-auth="key">私钥</button></div></div>
                 <div class="field span-4" data-auth-field="password"><label for="f-passwordRef">密码引用</label><input class="mono" id="f-passwordRef" data-field="passwordRef" placeholder="agentsshcli:connection"></div>
-                <div class="field span-5" data-auth-field="password"><label for="f-password">密码</label><div class="secret-control"><input id="f-password" data-secret="password" type="password" autocomplete="new-password" placeholder="使用已保存的密文"><button class="icon-btn" type="button" data-reveal="password" title="查看已保存密码" aria-label="查看已保存密码"><svg class="icon" aria-hidden="true"><use href="#i-eye"></use></svg></button><button class="icon-btn" type="button" data-replace="password" title="替换密码" aria-label="替换密码"><svg class="icon" aria-hidden="true"><use href="#i-pencil"></use></svg></button></div><div class="secret-meta" data-secret-meta="password">未加载明文</div></div>
+                <div class="field span-5" data-auth-field="password"><label for="f-password">密码</label><div class="secret-control"><input id="f-password" data-secret="password" type="password" autocomplete="new-password" placeholder="输入密码"><button class="icon-btn" type="button" data-reveal="password" title="查看已保存密码" aria-label="查看已保存密码"><svg class="icon" aria-hidden="true"><use href="#i-eye"></use></svg></button></div><div class="secret-meta" data-secret-meta="password">未加载明文</div></div>
                 <div class="field span-6" data-auth-field="key"><label for="f-privateKey">私钥路径</label><input class="mono" id="f-privateKey" data-field="privateKey" placeholder="~/.ssh/id_ed25519"></div>
                 <div class="field span-3" data-auth-field="key"><label for="f-passphrase">私钥口令</label><input id="f-passphrase" data-field="passphrase" type="password" autocomplete="new-password" placeholder="无口令时留空"></div>
               </div>
@@ -379,7 +379,7 @@
               </div>
             </section>
           </div>
-        </form>
+        </div>
       </main>
 
       <aside class="json-panel" id="json-panel" aria-label="JSON 编辑器">
@@ -669,6 +669,7 @@
       const meta = $("[data-secret-meta=\"password\"]");
       field.value = state.mode === "revealed" ? state.revealedValue : state.draftValue;
       field.readOnly = state.mode === "revealed";
+      field.placeholder = item.passwordRef ? "输入新密码以替换" : "输入密码";
       field.type = state.mode === "revealed" && state.visible ? "text" : "password";
       reveal.disabled = !item.passwordRef || state.mode === "draft";
       reveal.querySelector("use").setAttribute("href", state.visible ? "#i-eye-off" : "#i-eye");
@@ -677,16 +678,16 @@
       meta.classList.toggle("revealed", state.mode === "revealed");
     }
 
-    function replacePassword() {
-      const item = current();
-      const state = secretState(item);
+    // 查看状态只读；聚焦后清除已显示明文，只有实际输入才生成密码草稿。
+    function beginPasswordInput() {
+      const state = secretState(current());
+      if (state.mode !== "revealed") return;
       clearTimeout(state.timer);
       state.revealedValue = "";
       state.draftValue = "";
-      state.mode = "draft";
+      state.mode = "empty";
       state.visible = false;
       renderSecret();
-      $("#f-password").focus();
     }
 
     async function revealPassword() {
@@ -1353,13 +1354,12 @@
     });
     $("#search").addEventListener("input", renderList);
     form.addEventListener("input", updateFromForm);
+    $("#f-password").addEventListener("focus", beginPasswordInput);
     form.addEventListener("click", event => {
       const auth = event.target.closest("[data-auth]");
       const reveal = event.target.closest("[data-reveal]");
-      const replace = event.target.closest("[data-replace]");
       if (auth) setAuthMode(auth.dataset.auth);
       if (reveal) revealPassword();
-      if (replace) replacePassword();
     });
 
     $$(".tab").forEach(tab => tab.addEventListener("click", () => {

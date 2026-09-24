@@ -1,6 +1,6 @@
 {
   "name": "agent-ssh-cli",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "基于 CLI 的 SSH 代理工具，按 ssh-mcp-server 的能力一一映射",
   "type": "module",
   "engines": {
@@ -28,10 +28,10 @@
     "verify:published": "bash scripts/verify-published-packages.sh"
   },
   "optionalDependencies": {
-    "@agent-ssh-cli/darwin-arm64": "0.6.1",
-    "@agent-ssh-cli/darwin-x64": "0.6.1",
-    "@agent-ssh-cli/linux-arm64": "0.6.1",
-    "@agent-ssh-cli/linux-x64": "0.6.1",
-    "@agent-ssh-cli/win32-x64": "0.6.1"
+    "@agent-ssh-cli/darwin-arm64": "0.6.2",
+    "@agent-ssh-cli/darwin-x64": "0.6.2",
+    "@agent-ssh-cli/linux-arm64": "0.6.2",
+    "@agent-ssh-cli/linux-x64": "0.6.2",
+    "@agent-ssh-cli/win32-x64": "0.6.2"
   }
 }
