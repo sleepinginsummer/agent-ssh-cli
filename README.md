@@ -12,7 +12,7 @@
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white" alt="Node.js >=18"></a>
   <a href="https://www.npmjs.com/"><img src="https://img.shields.io/badge/npm-%3E%3D8-CB3837?logo=npm&logoColor=white" alt="npm >=8"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli"><img src="https://img.shields.io/badge/sys-win%2Fmac%2Flinux-0078D6" alt="sys win/mac/linux"></a>
-  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.6.0-blue" alt="release v0.6.0"></a>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.6.1-blue" alt="release v0.6.1"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
 </p>
 
@@ -124,6 +124,8 @@ AGENT_SSH_CONFIG=/path/to/config.json
 
 完整示例见 [example.config.json](example.config.json)。`~/.agent-ssh-cli/config.json` 保存真实连接信息。
 
+SSH 建连（含编辑器测试、跳板机、执行命令和文件传输）会按配置中的 `host` 与 `port` 核对本机 `~/.ssh/known_hosts`。未知或变化的服务器公钥会在发送 SSH 凭据前被拒绝，程序不会自动登记。首次连接前请通过可信渠道核实服务器公钥指纹，再将对应主机名和端口的公钥加入 `known_hosts`；非 22 端口需使用 `[host]:port` 格式。
+
 推荐使用可视化配置编辑器管理连接和替换密码：运行 `agentsshcli edit-config`，在浏览器中修改后保存。新密码会加密写入配置目录下的 `secrets.json`，`config.json` 只保留 `passwordRef`。页面查看已保存密码时，明文由本机后端解密，只在页面短暂显示并于 15 秒后清除。
 
 为兼容旧配置，CLI 仍支持明文凭据的被动迁移：首次写入 `password` 后，执行 `exec`、`upload` 或 `download` 连接该服务器时，会生成本地 `secret.key`，把密码加密保存到 `secrets.json`，并将配置中的明文字段替换为 `passwordRef`。sudo/su 明文凭据采用相同规则，但只在首次使用对应 flag 时迁移，密文 key 分别为 `agentsshcli:<name>:sudo` 和 `agentsshcli:<name>:su`。提权必须显式设置 `privilegeEnabled: true`。
@@ -155,6 +157,7 @@ agentsshcli stop-editor --config /path/to/config.json
 - 连续 10 分钟没有经过认证的有效 API 或真实页面输入时，服务自动退出并清理状态文件；旧 URL 随即失效。
 - 后端负责最终配置校验和并发 hash 检查；配置被其他进程修改时保存返回冲突，需要重新载入后再编辑。
 - JSON 面板支持“全局 / 当前连接”以及“预览 / 源码”；源码应用前仍会经过与表单一致的配置校验。
+- “测试连接”使用当前连接及其跳板机的页面草稿（含未保存的临时密码），验证 SSH 建连和认证后立即断开；不会保存配置或执行远端命令。单次最长等待 15 秒，同一时刻只运行一个测试。
 - 替换密码时只持久化加密后的 secret 和 `passwordRef`；复制连接不会复制密码引用或解密值。
 - 编辑器不提供连接级 PTY 开关，但会保留旧配置中的 `pty`；临时控制继续使用 `exec --pty` / `--no-pty`。
 - `stop-editor` 只停止本地配置编辑器，不会停止 SSH daemon、连接缓存或远端会话。

@@ -1117,6 +1117,38 @@ fn validate_editor_connections(
     Ok((normalized, reference_counts))
 }
 
+// 测试只在内存中使用草稿；未提供临时密码时复用已保存的密钥库引用。
+pub(crate) fn prepare_editor_test_connections(
+    config_path: &Path,
+    connections: &serde_json::Value,
+    connection_name: &str,
+    password_updates: &[(String, String)],
+) -> AppResult<Vec<Connection>> {
+    let (mut configs, _) = validate_editor_connections(connections)?;
+    let target = find_connection(&configs, connection_name)?;
+    let jump_name = target.jump_host.clone();
+    let mut updated = HashSet::new();
+    for (name, password) in password_updates {
+        if name != connection_name && jump_name.as_deref() != Some(name.as_str()) {
+            return Err(AppError::new("临时密码只能用于当前连接或跳板机"));
+        }
+        if password.is_empty() || !updated.insert(name.as_str()) {
+            return Err(AppError::new("临时密码不能为空或重复"));
+        }
+        let connection = configs
+            .iter_mut()
+            .find(|item| item.name == *name)
+            .ok_or_else(|| AppError::new(format!("未找到连接配置: {}", name)))?;
+        if connection.password_ref.is_none() {
+            return Err(AppError::new(format!("连接 {} 未配置密码引用", name)));
+        }
+        connection.password = Some(password.clone());
+    }
+    resolve_password_ref_for_connection(config_path, &mut configs, connection_name)?;
+    resolve_jump_password_refs(config_path, &mut configs, connection_name)?;
+    Ok(configs)
+}
+
 fn prepare_password_updates(
     config_path: &Path,
     connections: &[Connection],
@@ -1534,6 +1566,49 @@ mod tests {
         assert!(!raw.contains("old-secret"));
         assert!(!raw.contains("new-secret"));
         assert!(!raw.contains(r#""password""#));
+    }
+
+    #[test]
+    fn editor_test_uses_draft_without_saving_and_resolves_jump_secret() {
+        let (_dir, path) = write_config(
+            r#"[{"name":"target","host":"old.example","username":"root","password":"old-password","jumpHost":"jump"},{"name":"jump","host":"127.0.0.1","username":"root","password":"jump-password"}]"#,
+        );
+        prepare_editor_config(&path).unwrap();
+        let mut draft = read_editor_config(&path).unwrap().connections;
+        draft[0]["host"] = serde_json::json!("new.example");
+        let raw_before = fs::read(&path).unwrap();
+        let configs = prepare_editor_test_connections(
+            &path,
+            &draft,
+            "target",
+            &[("target".into(), "draft-password".into())],
+        )
+        .unwrap();
+        assert_eq!(configs[0].host, "new.example");
+        assert_eq!(configs[0].password.as_deref(), Some("draft-password"));
+        assert_eq!(configs[1].password.as_deref(), Some("jump-password"));
+        assert_eq!(fs::read(&path).unwrap(), raw_before);
+        assert_eq!(
+            decrypt_password(&path, "agentsshcli:target").unwrap(),
+            "old-password"
+        );
+    }
+
+    #[test]
+    fn editor_test_rejects_unrelated_duplicate_and_plaintext_passwords() {
+        let (_dir, path) = write_config(
+            r#"[{"name":"target","host":"127.0.0.1","username":"root","passwordRef":"agentsshcli:target"},{"name":"other","host":"127.0.0.2","username":"root","privateKey":"/tmp/id"}]"#,
+        );
+        let draft: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        for updates in [
+            vec![("other".into(), "secret".into())],
+            vec![("target".into(), "a".into()), ("target".into(), "b".into())],
+        ] {
+            assert!(prepare_editor_test_connections(&path, &draft, "target", &updates).is_err());
+        }
+        let mut plaintext = draft;
+        plaintext[0]["password"] = serde_json::json!("secret");
+        assert!(prepare_editor_test_connections(&path, &plaintext, "target", &[]).is_err());
     }
 
     #[test]

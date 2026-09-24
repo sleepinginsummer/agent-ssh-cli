@@ -57,7 +57,10 @@
     .btn.primary.dirty:hover { border-color: #ffc071; background: #ffc071; color: #111925; }
     .btn.danger:hover, .icon-btn.danger:hover { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
     .icon { width: 16px; height: 16px; stroke-width: 1.8; }
-    .statusbar #save { min-width: 88px; min-height: 38px; margin-left: auto; }
+    .statusbar #save { min-width: 88px; min-height: 38px; }
+    .unsaved-dot { display: none; flex: 0 0 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); }
+    #save.dirty .unsaved-dot { display: block; }
+    .statusbar #discard { margin-left: auto; }
 
     .workspace { display: grid; grid-template-columns: 260px minmax(600px, 1fr) minmax(380px, 23vw); min-height: 0; overflow: hidden; }
     .connections { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; overflow: hidden; border-right: 1px solid var(--line); background: var(--surface); }
@@ -71,15 +74,15 @@
     .search input:focus { border-color: var(--accent); outline: 0; box-shadow: 0 0 0 2px var(--accent-soft); }
     .connection-list { overflow-y: auto; padding: 7px; scrollbar-color: #4d5c6b transparent; scrollbar-width: thin; }
     .connection-empty { padding: 28px 12px; color: var(--muted); font-size: 12px; text-align: center; }
-    .connection-item { position: relative; display: grid; width: 100%; grid-template-columns: 10px minmax(0, 1fr) 18px; align-items: center; gap: 11px; min-height: 58px; margin: 0 0 3px; padding: 8px 10px; overflow: hidden; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--muted-strong); text-align: left; opacity: 0; transform: translateX(-6px); animation: connection-enter 220ms var(--ease-out) forwards; animation-delay: calc(var(--order) * 25ms); transition: background-color 150ms ease, color 150ms ease; }
+    .connection-item { position: relative; display: grid; width: 100%; grid-template-columns: 10px minmax(0, 1fr) 18px; align-items: center; gap: 11px; min-height: 58px; margin: 0 0 3px; padding: 8px 10px; overflow: hidden; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--muted-strong); text-align: left; transition: background-color 150ms ease, color 150ms ease; }
     .connection-item::before { position: absolute; top: 9px; bottom: 9px; left: 0; width: 2px; border-radius: 2px; background: transparent; content: ""; }
     .connection-item:hover { background: rgba(255, 255, 255, .025); color: var(--ink); }
     .connection-item.active { background: var(--surface-hover); color: var(--ink); }
     .connection-item.active::before { background: var(--accent); }
-    @keyframes connection-enter { to { opacity: 1; transform: translateX(0); } }
     .connection-index { width: 7px; height: 7px; border-radius: 50%; background: var(--signal); }
     .connection-index .icon { display: none; }
     .connection-item.active .connection-index { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .connection-item.unsaved .connection-index { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
     .connection-copy { display: grid; min-width: 0; }
     .connection-copy strong { overflow: hidden; font: 500 12px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
     .connection-copy span { overflow: hidden; margin-top: 4px; color: var(--muted); font: 9px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
@@ -98,6 +101,10 @@
     .endpoint { overflow: hidden; color: var(--muted); font: 10px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
     .identity-actions { display: flex; flex: 0 0 auto; gap: 6px; }
     .identity-actions .icon-btn { width: 32px; min-height: 32px; }
+    .identity-actions #test-connection { min-height: 32px; padding: 5px 9px; font-size: 10px; white-space: nowrap; }
+    .test-status { margin-top: 6px; color: var(--muted-strong); font-size: 11px; overflow-wrap: anywhere; }
+    .test-status.success { color: var(--signal); }
+    .test-status.failure { color: var(--danger); }
     .route-summary { min-width: 0; padding: 12px 16px; overflow: hidden; border: 1px solid var(--line-dark); border-radius: 8px; background: var(--surface-muted); }
     .route-track { display: flex; align-items: center; min-width: 0; min-height: 34px; overflow-x: auto; scrollbar-width: thin; }
     .route-node { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; min-height: 34px; padding: 6px 10px; border: 1px solid var(--line-dark); border-radius: 8px; background: var(--surface); color: var(--ink-2); }
@@ -230,7 +237,6 @@
     }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation: none !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
-      .connection-item { opacity: 1; transform: none; }
     }
   </style>
 </head>
@@ -243,6 +249,7 @@
     <symbol id="i-save" viewBox="0 0 24 24"><path d="M15.2 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.8z"/><path d="M17 21v-8H7v8M7 3v5h8"/></symbol>
     <symbol id="i-braces" viewBox="0 0 24 24"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1M16 21h1a2 2 0 0 0 2-2v-5a2 2 0 0 1 2-2 2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1"/></symbol>
     <symbol id="i-refresh-cw" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 0-15.5-6.2L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 15.5 6.2L21 16"/><path d="M16 16h5v5"/></symbol>
+    <symbol id="i-undo-2" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
     <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
@@ -295,8 +302,10 @@
             <div class="identity-copy">
               <div class="identity-kicker"><span id="identity-mode">密码认证</span></div>
               <div class="identity-primary"><h1 id="identity-name">生产应用</h1><span class="endpoint" id="identity-endpoint">deploy@10.20.8.14:22</span></div>
+              <div class="test-status" id="connection-test-status" role="status" aria-live="polite" hidden></div>
             </div>
             <div class="identity-actions">
+              <button class="btn" id="test-connection" type="button"><svg class="icon" aria-hidden="true"><use href="#i-network"></use></svg><span>测试连接</span></button>
               <button class="icon-btn" id="duplicate" type="button" title="复制连接" aria-label="复制连接"><svg class="icon" aria-hidden="true"><use href="#i-copy"></use></svg></button>
               <button class="icon-btn danger" id="delete" type="button" title="删除连接" aria-label="删除连接"><svg class="icon" aria-hidden="true"><use href="#i-trash-2"></use></svg></button>
             </div>
@@ -392,7 +401,8 @@
     <footer class="statusbar">
       <svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg><span id="status">配置有效</span>
       <div class="status-meta"><span>UTF-8 / 2 空格</span><span id="status-count">3 个连接</span></div>
-      <button class="btn primary" id="save" type="button"><svg class="icon" aria-hidden="true"><use href="#i-save"></use></svg><span>保存配置</span></button>
+      <button class="btn" id="discard" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#i-undo-2"></use></svg><span>撤销改动</span></button>
+      <button class="btn primary" id="save" type="button"><svg class="icon" aria-hidden="true"><use href="#i-save"></use></svg><span>保存配置</span><span class="unsaved-dot" aria-hidden="true"></span></button>
     </footer>
   </div>
 
@@ -409,6 +419,8 @@
     let connections = structuredClone(seed);
     let selected = 0;
     let dirty = false;
+    let savedConnections = structuredClone(seed);
+    let savedByItem = new WeakMap();
     let configHash = "";
     let editVersion = 0;
     let referenceName = connections[0]?.name || "";
@@ -559,33 +571,62 @@
       $("#path-icon").innerHTML = iconUse("i-file-json");
     }
 
+    function updateListItem(button, item, index) {
+      const view = connectionView(item);
+      const unsaved = connectionChanged(item);
+      button.connection = item;
+      button.dataset.index = index;
+      button.classList.toggle("active", index === selected);
+      button.classList.toggle("unsaved", unsaved);
+      button.setAttribute("aria-current", String(index === selected));
+      button.setAttribute("aria-label", `第 ${index + 1} 个连接：${view.displayName}${unsaved ? "，未保存" : ""}`);
+      button.querySelector(".connection-copy strong").textContent = view.displayName;
+      button.querySelector(".connection-copy span").textContent = view.endpoint;
+      const authIcon = button.querySelector(".auth-icon");
+      authIcon.querySelector("use").setAttribute("href", `#${view.authIcon}`);
+      authIcon.title = view.authLabel;
+      authIcon.setAttribute("aria-label", view.authLabel);
+    }
+
     function renderList() {
       const query = $("#search").value.trim().toLowerCase();
       const visible = connections.map((item, index) => ({ item, index })).filter(({ item }) => `${item.name || ""} ${item.host || ""} ${item.username || ""}`.toLowerCase().includes(query));
-      list.innerHTML = visible.length ? visible.map(({ item, index }, order) => {
-        const view = connectionView(item);
-        return `<button class="connection-item${index === selected ? " active" : ""}" style="--order:${order}" type="button" data-index="${index}" aria-current="${index === selected}" aria-label="第 ${index + 1} 个连接：${escapeHtml(view.displayName)}">
-          <span class="connection-index">${iconUse("i-server")}</span>
-          <span class="connection-copy"><strong>${escapeHtml(view.displayName)}</strong><span>${escapeHtml(view.endpoint)}</span></span>
-          <span class="auth-icon" title="${view.authLabel}" aria-label="${view.authLabel}">${iconUse(view.authIcon)}</span>
-        </button>`;
-      }).join("") : `<div class="connection-empty">未找到连接</div>`;
+      const oldButtons = [...list.querySelectorAll(".connection-item")];
+      const byItem = new Map(oldButtons.map(button => [button.connection, button]));
+      const byName = new Map(oldButtons.map(button => [button.connection.name, button]));
+      const retained = new Set();
+      const scrollTop = list.scrollTop;
+      const scrollLeft = list.scrollLeft;
+      const focusWasInList = list.contains(document.activeElement);
+      if (!visible.length) {
+        if (!list.querySelector(".connection-empty")) list.innerHTML = `<div class="connection-empty">未找到连接</div>`;
+      } else {
+        visible.forEach(({ item, index }, order) => {
+          const named = byName.get(item.name);
+          let button = byItem.get(item);
+          if (!button && named && !connections.includes(named.connection) && !retained.has(named)) button = named;
+          if (!button) {
+            button = document.createElement("button");
+            button.type = "button";
+            button.className = "connection-item";
+            button.innerHTML = `<span class="connection-index">${iconUse("i-server")}</span><span class="connection-copy"><strong></strong><span></span></span><span class="auth-icon">${iconUse("i-lock-keyhole")}</span>`;
+          }
+          updateListItem(button, item, index);
+          retained.add(button);
+          if (list.children[order] !== button) list.insertBefore(button, list.children[order] || null);
+        });
+        [...list.children].forEach(child => { if (!retained.has(child)) child.remove(); });
+      }
+      list.scrollTop = scrollTop;
+      list.scrollLeft = scrollLeft;
+      if (focusWasInList && !list.contains(document.activeElement)) list.querySelector(".connection-item.active")?.focus({ preventScroll: true });
       $("#connection-count").textContent = `${connections.length} 个连接`;
       $("#status-count").textContent = `${connections.length} 个连接`;
     }
 
     function updateCurrentListItem() {
       const button = list.querySelector(`[data-index="${selected}"]`);
-      const item = current();
-      if (!button || !item) return;
-      const view = connectionView(item);
-      button.setAttribute("aria-label", `第 ${selected + 1} 个连接：${view.displayName}`);
-      button.querySelector(".connection-copy strong").textContent = view.displayName;
-      button.querySelector(".connection-copy span").textContent = view.endpoint;
-      const authIcon = button.querySelector(".auth-icon");
-      authIcon.innerHTML = iconUse(view.authIcon);
-      authIcon.title = view.authLabel;
-      authIcon.setAttribute("aria-label", view.authLabel);
+      if (button && current()) updateListItem(button, current(), selected);
     }
 
     function renderJumpHosts() {
@@ -868,16 +909,60 @@
 
     function renderAll() { renderList(); renderForm(); renderJson(); updateSyncState(); }
 
-    function markDirty() { editVersion += 1; dirty = true; updateSyncState(); }
+    function captureSavedSnapshot(snapshot, items = connections) {
+      savedConnections = structuredClone(snapshot);
+      savedByItem = new WeakMap();
+      items.forEach((item, index) => savedByItem.set(item, savedConnections[index]));
+    }
+
+    function connectionChanged(item) {
+      const saved = savedByItem.get(item);
+      const state = secretUi.get(item);
+      return !saved || JSON.stringify(ordered(item)) !== JSON.stringify(ordered(saved)) || Boolean(state?.mode === "draft" && state.draftValue);
+    }
+
+    function markDirty() { editVersion += 1; setTestStatus(); updateSyncState(); }
     function updateSyncState() {
+      dirty = (jsonSource.classList.contains("active") && jsonSource.value !== jsonText()) || !connectionsSemanticallyEqual(connections, savedConnections) || connections.some(item => {
+        const state = secretUi.get(item);
+        return state?.mode === "draft" && Boolean(state.draftValue);
+      });
       $("#save").classList.toggle("dirty", dirty);
+      $("#discard").disabled = !dirty || $("#save").disabled;
+      list.querySelectorAll(".connection-item").forEach(button => {
+        const item = connections[Number(button.dataset.index)];
+        if (!item) return;
+        const unsaved = connectionChanged(item);
+        button.classList.toggle("unsaved", unsaved);
+        button.setAttribute("aria-label", `第 ${Number(button.dataset.index) + 1} 个连接：${connectionView(item).displayName}${unsaved ? "，未保存" : ""}`);
+      });
+    }
+
+    function setTestStatus(message = "", kind = "") {
+      const status = $("#connection-test-status");
+      status.hidden = !message;
+      status.textContent = message;
+      status.classList.toggle("success", kind === "success");
+      status.classList.toggle("failure", kind === "failure");
     }
 
     function selectConnection(index) {
       if (index === selected) return;
+      setTestStatus();
       if (!commitPendingJsonSource()) return;
+      const previous = list.querySelector(".connection-item.active");
+      const next = list.querySelector(`[data-index="${index}"]`);
+      if (previous) {
+        previous.classList.remove("active");
+        previous.setAttribute("aria-current", "false");
+      }
+      if (next) {
+        next.classList.add("active");
+        next.setAttribute("aria-current", "true");
+      }
       selected = index;
-      renderAll();
+      renderForm();
+      renderJson();
       if (jsonSource.classList.contains("active")) jsonSource.value = jsonText();
     }
 
@@ -976,6 +1061,28 @@
       return applySource();
     }
 
+    // JSON 解析会替换对象：先按唯一名称继承基准，仅在列表长度不变时按位置识别重命名。
+    function transferSavedIdentities(previousItems, nextItems) {
+      const previousByName = new Map(previousItems.map(item => [item.name, item]));
+      const nextNames = new Set(nextItems.map(item => item.name));
+      const matched = new Set();
+      nextItems.forEach(item => {
+        const previous = previousByName.get(item.name);
+        if (!previous) return;
+        matched.add(previous);
+        const saved = savedByItem.get(previous);
+        if (saved) savedByItem.set(item, saved);
+      });
+      if (previousItems.length !== nextItems.length) return;
+      nextItems.forEach((item, index) => {
+        if (savedByItem.has(item) || previousByName.has(item.name)) return;
+        const previous = previousItems[index];
+        if (matched.has(previous) || nextNames.has(previous.name)) return;
+        const saved = savedByItem.get(previous);
+        if (saved) savedByItem.set(item, saved);
+      });
+    }
+
     function applySource() {
       const result = parseAndValidateSource();
       renderJsonStatus(result);
@@ -989,10 +1096,12 @@
         const changed = !connectionsSemanticallyEqual(result.candidateConnections, connections);
         plan.clears.forEach(clearSecretState);
         plan.transfers.forEach(({ item, state }) => secretUi.set(item, state));
+        transferSavedIdentities(connections, result.candidateConnections);
         connections = result.candidateConnections;
         selected = Math.min(selected, connections.length - 1);
         referenceName = current()?.name || "";
-        if (changed && !dirty) markDirty();
+        jsonSource.value = jsonText();
+        if (changed) markDirty();
         renderAll();
         return true;
       } catch (error) {
@@ -1104,15 +1213,53 @@
         configHash = snapshot.hash;
         selected = 0;
         referenceName = connections[0].name;
-        dirty = false;
+        captureSavedSnapshot(connections);
+        setTestStatus();
         editVersion = 0;
         $("#config-path").textContent = snapshot.path;
         $("#add-default-blacklist").disabled = false;
+        jsonSource.value = jsonText();
         renderAll();
         return true;
       } catch (error) {
         toast(error.message);
         return false;
+      }
+    }
+
+    async function testConnection() {
+      if (jsonSource.classList.contains("active") && !applySource()) return;
+      const target = current();
+      const jump = connections.find(item => item.name === target.jumpHost);
+      const testItems = [target, jump].filter(Boolean);
+      if (!validateConnections(testItems).ok) {
+        validate();
+        return setTestStatus("请先修正当前连接或跳板机配置", "failure");
+      }
+      if (location.protocol === "file:") return setTestStatus("文件预览模式无法测试连接", "failure");
+      const version = editVersion;
+      const passwordUpdates = testItems.flatMap(item => {
+        const state = secretUi.get(item);
+        return state?.mode === "draft" && state.draftValue
+          ? [{ connection: item.name, password: state.draftValue }] : [];
+      });
+      const button = $("#test-connection");
+      button.disabled = true;
+      button.querySelector("span").textContent = "测试中...";
+      setTestStatus("正在连接...");
+      try {
+        const result = await apiRequest("/api/connections/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ connections: testItems, connection: target.name, passwordUpdates })
+        });
+        if (current() !== target || editVersion !== version) return;
+        setTestStatus(result.ok ? "连接成功" : `连接失败：${result.error}`, result.ok ? "success" : "failure");
+      } catch (error) {
+        if (current() === target && editVersion === version) setTestStatus(`连接失败：${error.message}`, "failure");
+      } finally {
+        button.disabled = false;
+        button.querySelector("span").textContent = "测试连接";
       }
     }
 
@@ -1124,6 +1271,22 @@
       const loaded = await loadConfiguration();
       button.disabled = false;
       if (loaded) toast("已从磁盘重新载入");
+    }
+
+    function discardChanges() {
+      if (!dirty || $("#save").disabled) return;
+      if (!window.confirm("撤销所有未保存的改动吗？")) return;
+      connections.forEach(clearSecretState);
+      connections = structuredClone(savedConnections);
+      selected = Math.min(selected, connections.length - 1);
+      referenceName = current().name;
+      editVersion += 1;
+      captureSavedSnapshot(connections);
+      setTestStatus();
+      jsonSource.value = jsonText();
+      renderAll();
+      renderJsonStatus({ ok: true });
+      toast("已撤销未保存的改动");
     }
 
     async function closeEditor() {
@@ -1146,8 +1309,8 @@
       if (!validate()) return toast("请先修正配置错误");
       if (location.protocol === "file:") return toast("文件预览模式不会写入磁盘");
 
-      const saveVersion = editVersion;
       const saveConnections = structuredClone(connections);
+      const savedItems = connections.slice();
       const draftSnapshots = connections.flatMap(item => {
         const state = secretUi.get(item);
         return item.passwordRef && state?.mode === "draft" && state.draftValue
@@ -1157,6 +1320,7 @@
       const passwordUpdates = draftSnapshots.map(({ connection, password }) => ({ connection, password }));
       const button = $("#save");
       button.disabled = true;
+      $("#discard").disabled = true;
       try {
         const payload = await apiRequest("/api/config", {
           method: "POST",
@@ -1170,7 +1334,8 @@
             clearSecretState(snapshot.item);
           }
         });
-        dirty = editVersion !== saveVersion;
+        captureSavedSnapshot(saveConnections, savedItems);
+        transferSavedIdentities(savedItems, connections);
         updateSyncState();
         renderSecret();
         toast("配置已保存");
@@ -1178,6 +1343,7 @@
         toast(error.message);
       } finally {
         button.disabled = false;
+        updateSyncState();
       }
     }
 
@@ -1205,6 +1371,8 @@
     $("#duplicate").addEventListener("click", duplicateConnection);
     $("#delete").addEventListener("click", deleteConnection);
     $("#save").addEventListener("click", saveConfiguration);
+    $("#test-connection").addEventListener("click", testConnection);
+    $("#discard").addEventListener("click", discardChanges);
     $("#reload").addEventListener("click", reloadConfiguration);
     $("#close-editor").addEventListener("click", closeEditor);
     $("#add-default-blacklist").addEventListener("click", addDefaultBlacklist);
@@ -1243,6 +1411,7 @@
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); $("#save").click(); }
     });
 
+    captureSavedSnapshot(connections);
     syncJsonScopeState();
     syncJsonPanelState();
     renderChromeIcons();

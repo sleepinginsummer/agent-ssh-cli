@@ -106,6 +106,8 @@ The configuration file is an array, and each item represents one server:
 
 See the full example in [example.config.json](example.config.json). Store real connection information in `~/.agent-ssh-cli/config.json`.
 
+Every SSH connection (including editor tests, jump hosts, commands, and transfers) checks the server key against the local `~/.ssh/known_hosts` entry for its configured `host` and `port`. Unknown or changed keys are rejected before SSH credentials are sent and are never added automatically. Verify the server key fingerprint through a trusted channel before adding it; for non-default ports, use the `[host]:port` format.
+
 To reduce password leakage from configuration files, password authentication is passively encrypted the first time that server is used: after you write a plaintext `password`, the next `exec`, `upload`, or `download` for that server encrypts the password into `secrets.json` under the config directory, creates a local `secret.key`, then writes the config back with an empty `password` and a `passwordRef`. Later runs decrypt through `passwordRef`. To change the password, replace the empty `password` with the new plaintext password; the next connection overwrites the old encrypted value.
 
 Reference configuration

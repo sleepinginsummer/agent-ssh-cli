@@ -2,13 +2,14 @@
 //
 // 与 `exec.rs` 的分工：本模块只负责把会话建好，命令执行与提权编排由 `exec.rs` 负责。
 
-use crate::config::{find_connection, Connection};
+use crate::config::{find_connection, home_dir, Connection};
 use crate::{AppError, AppResult};
 
 use russh::keys::{load_secret_key, PrivateKeyWithHashAlg};
 use russh::{client, Preferred};
 use std::borrow::Cow;
 use std::net::IpAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -173,16 +174,27 @@ async fn connect_socks_proxy(connection: &Connection) -> AppResult<tokio::net::T
     Ok(stream)
 }
 
-pub(crate) struct RusshClient;
+pub(crate) struct RusshClient {
+    host: String,
+    port: u16,
+    known_hosts_path: PathBuf,
+}
 
 impl client::Handler for RusshClient {
     type Error = russh::Error;
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &russh::keys::ssh_key::PublicKey,
+        server_public_key: &russh::keys::ssh_key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        Ok(true)
+        // 在密码或私钥认证前核对目标与跳板机各自的主机公钥；未知主机不得自动信任。
+        russh::keys::known_hosts::check_known_hosts_path(
+            &self.host,
+            self.port,
+            server_public_key,
+            &self.known_hosts_path,
+        )
+        .map_err(Into::into)
     }
 }
 
@@ -282,10 +294,32 @@ async fn connect_russh_over_stream(
         },
         ..Default::default()
     };
-    let mut session = client::connect_stream(Arc::new(config), stream, RusshClient)
+    let known_hosts_path = home_dir()
+        .ok_or_else(|| AppError::new("无法确定用户主目录，不能校验 SSH 服务器公钥"))?
+        .join(".ssh")
+        .join("known_hosts");
+    let handler = RusshClient {
+        host: connection.host.clone(),
+        port: connection.port,
+        known_hosts_path: known_hosts_path.clone(),
+    };
+    let mut session = client::connect_stream(Arc::new(config), stream, handler)
         .await
-        .map_err(|error| {
-            AppError::new(format!("连接 {} 建立 SSH 失败: {}", connection.name, error))
+        .map_err(|error| match error {
+            russh::Error::UnknownKey => AppError::new(format!(
+                "连接 {} 的服务器公钥未在 {} 登记（{}:{}）；请先独立核实服务器指纹并登记",
+                connection.name,
+                known_hosts_path.display(),
+                connection.host,
+                connection.port
+            )),
+            russh::Error::Keys(russh::keys::Error::KeyChanged { line }) => AppError::new(format!(
+                "连接 {} 的服务器公钥与 {} 第 {} 行不符；请先核实服务器身份，勿直接覆盖旧记录",
+                connection.name,
+                known_hosts_path.display(),
+                line
+            )),
+            _ => AppError::new(format!("连接 {} 建立 SSH 失败: {}", connection.name, error)),
         })?;
     authenticate_russh(connection, &mut session).await?;
     Ok(session)
@@ -390,6 +424,51 @@ mod tests {
     use crate::test_support::write_config;
     use serde::Deserialize;
 
+    #[test]
+    fn server_key_requires_matching_known_host_and_port() {
+        use russh::client::Handler as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let known_hosts_path = directory.path().join("known_hosts");
+        let trusted = russh::keys::parse_public_key_base64(
+            "AAAAC3NzaC1lZDI1NTE5AAAAIJdD7y3aLq454yWBdwLWbieU1ebz9/cu7/QEXn9OIeZJ",
+        )
+        .unwrap();
+        let changed = russh::keys::parse_public_key_base64(
+            "AAAAC3NzaC1lZDI1NTE5AAAAIA6rWI3G1sz07DnfFlrouTcysQlj2P+jpNSOEWD9OJ3X",
+        )
+        .unwrap();
+        std::fs::write(
+            &known_hosts_path,
+            format!("[localhost]:13265 {}\n", trusted.to_openssh().unwrap()),
+        )
+        .unwrap();
+        let mut handler = RusshClient {
+            host: "localhost".into(),
+            port: 13265,
+            known_hosts_path,
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        assert!(runtime
+            .block_on(handler.check_server_key(&trusted))
+            .unwrap());
+        assert!(runtime
+            .block_on(handler.check_server_key(&changed))
+            .is_err());
+        handler.port = 22;
+        assert!(!runtime
+            .block_on(handler.check_server_key(&trusted))
+            .unwrap());
+        handler.port = 13265;
+        handler.host = "different-host".into();
+        assert!(!runtime
+            .block_on(handler.check_server_key(&trusted))
+            .unwrap());
+    }
+
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct RouteCase {
@@ -439,5 +518,84 @@ mod tests {
         let proxy = parse_socks_proxy("127.0.0.1:1080").unwrap();
         assert_eq!(proxy.host, "127.0.0.1");
         assert_eq!(proxy.port, 1080);
+    }
+
+    struct PasswordServer;
+
+    impl russh::server::Handler for PasswordServer {
+        type Error = russh::Error;
+
+        async fn auth_password(
+            &mut self,
+            username: &str,
+            password: &str,
+        ) -> Result<russh::server::Auth, Self::Error> {
+            if username == "test-user" && password == "test-password" {
+                Ok(russh::server::Auth::Accept)
+            } else {
+                Ok(russh::server::Auth::reject())
+            }
+        }
+    }
+
+    #[test]
+    fn registered_server_key_allows_password_authentication() {
+        let directory = tempfile::tempdir().unwrap();
+        let known_hosts_path = directory.path().join("known_hosts");
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let private_key: russh::keys::PrivateKey =
+                russh::keys::ssh_key::private::Ed25519Keypair::from_seed(&[7; 32]).into();
+            std::fs::write(
+                &known_hosts_path,
+                format!(
+                    "[127.0.0.1]:{} {}\n",
+                    port,
+                    private_key.public_key().to_openssh().unwrap()
+                ),
+            )
+            .unwrap();
+            let mut server_config = russh::server::Config::default();
+            server_config.keys.push(private_key);
+            let server_config = Arc::new(server_config);
+            let server_task = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let session = russh::server::run_stream(server_config, stream, PasswordServer)
+                    .await
+                    .unwrap();
+                session.await.unwrap();
+            });
+            let (_dir, config_path) = write_config(&format!(
+                r#"[{{"name":"test","host":"127.0.0.1","port":{},"username":"test-user","password":"test-password"}}]"#,
+                port
+            ));
+            let configs = load_config(&config_path).unwrap();
+            let connection = &configs[0];
+            let stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .unwrap();
+            let handler = RusshClient {
+                host: connection.host.clone(),
+                port: connection.port,
+                known_hosts_path,
+            };
+            let mut client = client::connect_stream(Arc::new(client::Config::default()), stream, handler)
+                .await
+                .unwrap();
+            authenticate_russh(connection, &mut client).await.unwrap();
+            client
+                .disconnect(russh::Disconnect::ByApplication, "", "")
+                .await
+                .unwrap();
+            drop(client);
+            tokio::time::timeout(Duration::from_secs(3), server_task)
+                .await
+                .unwrap()
+                .unwrap();
+        });
     }
 }

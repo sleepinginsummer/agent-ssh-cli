@@ -88,6 +88,8 @@ mkdir -p ~/.agent-ssh-cli
 ~/.agent-ssh-cli/config.json
 ```
 
+所有 SSH 建连（含跳板机与编辑器“测试连接”）都会按配置中的主机名和端口校验 `~/.ssh/known_hosts`。未登记或公钥变更时不得绕过校验或自动信任；先通过可信渠道核实服务器公钥指纹，再登记对应主机（非 22 端口为 `[host]:port`）。
+
 推荐通过 `agentsshcli edit-config` 替换密码：编辑器保存时会把新密码加密写入 `secrets.json`，配置文件只保留 `passwordRef`。旧配置仍支持被动迁移：若连接包含非空明文 `password`，下一次执行 `exec`、`upload` 或 `download` 时会生成 `secret.key`、加密保存密码，并把明文字段替换为引用。不要在对话、日志或命令输出中展示明文密码。
 
 ## edit-config / stop-editor
@@ -110,6 +112,7 @@ agentsshcli stop-editor [--config <path>]
 - `edit-config` / `stop-editor` 支持 `--config`、`--help` 和 `--version`，不接受 `--no-cache`、`--cache-ttl` 或位置参数。
 - 配置文件可能被其它进程修改；保存返回冲突时先重新载入，不得绕过 hash 检查或直接覆盖。
 - JSON 面板支持“全局 / 当前连接”和“预览 / 源码”；后端校验是最终配置契约，前端提示不能替代保存结果。
+- 页面“测试连接”用当前草稿与相关跳板机进行一次 SSH 建连和认证（包括未保存的密码草稿），完成后断开，不保存配置、不执行命令；同时只能进行一次测试。
 - 查看密码会由本机后端解密，明文只在页面短暂显示并于 15 秒后清除；不要通过终端、脚本或 HTTP 调试接口提取密码。
 - 替换密码应使用页面的替换操作；保存后 `config.json` 只保留 `passwordRef`，密文写入同目录的 `secrets.json`。复制连接不会复制密码引用。
 - 编辑器不显示连接级 PTY 控件，但会透传已有 `pty`；执行命令时继续使用 `exec --pty` / `--no-pty` 临时覆盖。
