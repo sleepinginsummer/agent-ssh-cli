@@ -23,7 +23,10 @@ struct SocksProxy {
     password: Option<String>,
 }
 
-trait SshStream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
+pub(crate) trait SshStream:
+    tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send
+{
+}
 
 impl<T> SshStream for T where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
 
@@ -262,12 +265,9 @@ async fn connect_russh_direct(
     connect_russh_over_stream(connection, stream).await
 }
 
-async fn connect_russh_over_stream(
-    connection: &Connection,
-    stream: Box<dyn SshStream>,
-) -> AppResult<client::Handle<RusshClient>> {
-    let config = client::Config {
-        // SSH 连接空闲超时：30s 过短，慢速大文件传输或长任务可能被误断，放宽到 5 分钟。
+pub(crate) fn ssh_client_config() -> client::Config {
+    client::Config {
+        // SSH 连接空闲超时：慢速大文件传输或长任务允许 5 分钟。
         inactivity_timeout: Some(Duration::from_secs(300)),
         preferred: Preferred {
             kex: Cow::Owned(vec![
@@ -275,7 +275,7 @@ async fn connect_russh_over_stream(
                 russh::kex::CURVE25519_PRE_RFC_8731,
                 russh::kex::DH_GEX_SHA256,
                 russh::kex::DH_G14_SHA256,
-                // 现代算法优先，旧 DH 算法仅作为兼容历史 OpenSSH 服务端的最后兜底。
+                // 旧 DH 算法仅作为兼容历史 OpenSSH 服务端的最后兜底。
                 russh::kex::DH_G14_SHA1,
                 russh::kex::DH_GEX_SHA1,
                 russh::kex::DH_G1_SHA1,
@@ -293,7 +293,13 @@ async fn connect_russh_over_stream(
             ..Default::default()
         },
         ..Default::default()
-    };
+    }
+}
+async fn connect_russh_over_stream(
+    connection: &Connection,
+    stream: Box<dyn SshStream>,
+) -> AppResult<client::Handle<RusshClient>> {
+    let config = ssh_client_config();
     let known_hosts_path = home_dir()
         .ok_or_else(|| AppError::new("无法确定用户主目录，不能校验 SSH 服务器公钥"))?
         .join(".ssh")
@@ -325,7 +331,7 @@ async fn connect_russh_over_stream(
     Ok(session)
 }
 
-async fn open_connection_stream(
+pub(crate) async fn open_connection_stream(
     configs: &[Connection],
     connection: &Connection,
 ) -> AppResult<Box<dyn SshStream>> {

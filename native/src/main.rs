@@ -3,6 +3,7 @@ mod config;
 mod daemon;
 mod editor;
 mod exec;
+mod host_key;
 mod privilege;
 mod runtime;
 mod ssh;

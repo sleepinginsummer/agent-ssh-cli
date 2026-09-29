@@ -11,6 +11,7 @@ description: 使用基于 SSH 的 CLI 安全操作远端服务器并管理本地
 
 - 列出本地配置中的 SSH 服务器连接
 - 在指定远端服务器上执行命令
+- 使用独立核实的 SHA256 指纹登记 SSH 主机公钥到本机 `known_hosts`
 - 上传本地文件到远端服务器
 - 从远端服务器下载文件到本地
 - 通过命令黑白名单限制可执行命令
@@ -88,9 +89,23 @@ mkdir -p ~/.agent-ssh-cli
 ~/.agent-ssh-cli/config.json
 ```
 
-所有 SSH 建连（含跳板机与编辑器“测试连接”）都会按配置中的主机名和端口校验 `~/.ssh/known_hosts`。未登记或公钥变更时不得绕过校验或自动信任；先通过可信渠道核实服务器公钥指纹，再登记对应主机（非 22 端口为 `[host]:port`）。
+所有 SSH 建连（含跳板机与编辑器“测试连接”）都会按配置中的主机名和端口校验 `~/.ssh/known_hosts`。未登记或公钥变更时不得绕过校验或自动信任；先从服务器控制台或可信运维记录独立核实 SHA256 指纹，再使用 `trust-host` 登记对应主机（非 22 端口为 `[host]:port`）。网络扫描得到的公钥或 CLI 输出的指纹本身不能作为独立核实依据。
 
 推荐通过 `agentsshcli edit-config` 替换密码：编辑器保存时会把新密码加密写入 `secrets.json`，配置文件只保留 `passwordRef`。旧配置仍支持被动迁移：若连接包含非空明文 `password`，下一次执行 `exec`、`upload` 或 `download` 时会生成 `secret.key`、加密保存密码，并把明文字段替换为引用。不要在对话、日志或命令输出中展示明文密码。
+
+## trust-host
+
+已通过服务器控制台或可信运维记录独立核实公钥指纹时，才登记连接：
+
+```bash
+agentsshcli trust-host --fingerprint 'SHA256:<已核实指纹>' '<connectionName>'
+agentsshcli trust-host --config /path/to/config.json --fingerprint 'SHA256:<已核实指纹>' '<connectionName>'
+```
+
+- `--fingerprint` 必填，仅接受完整的 SHA256 指纹，必须放在连接名前；`--config` 放在其前面。
+- 命令通过该连接原有的直连、SOCKS5 或跳板机路径完成握手，不认证目标机、不执行命令。跳板机若未登记，先核实并登记跳板机。
+- 指纹不匹配或已有不同公钥时拒绝写入，不覆盖旧记录；同一公钥已登记时不重复追加。只有核实一致且没有该主机记录时才写入 `~/.ssh/known_hosts`。
+- 不要用 `ssh-keyscan` 的结果或首次连接时网络返回的指纹自行确认；失败时先检查主机身份，不得改用跳过校验的参数。
 
 ## edit-config / stop-editor
 

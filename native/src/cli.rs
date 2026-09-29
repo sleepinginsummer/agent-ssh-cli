@@ -5,7 +5,8 @@
 use crate::config::{
     default_config_path, ensure_privilege_enabled, find_connection, init_config, load_config,
     load_config_for_connection, load_config_for_execute, path_absolute_from,
-    prepare_connection_config, prepare_privilege_config, resolve_pty, validate_command, Connection,
+    prepare_connection_config, prepare_privilege_config, resolve_jump_password_refs, resolve_pty,
+    validate_command, Connection,
 };
 use crate::daemon::{
     request_daemon_execute, request_daemon_transfer, request_stop_daemon, run_daemon,
@@ -13,6 +14,7 @@ use crate::daemon::{
 };
 use crate::editor::{run_editor_service_args, start_editor, stop_editor};
 use crate::exec::{command_with_directory, execute_remote_command, ExecOutput};
+use crate::host_key::trust_host;
 use crate::privilege::PrivilegeMode;
 use crate::transfer::{download_dir, download_file, upload_dir, upload_file};
 use crate::{AppError, AppResult, JSON_OUTPUT_MODE};
@@ -42,10 +44,11 @@ const HELP_AGENTSSHCLI: &str = r#"
   agentsshcli download [--config <path>] [--no-cache] [--cache-ttl <ms>] <connectionName> <remotePath> <localPath>
   agentsshcli download [--config <path>] [--no-cache] [--cache-ttl <ms>] --connection <name> --remote <path> --local <path>
   agentsshcli init-config
+  agentsshcli trust-host [--config <path>] --fingerprint SHA256:<digest> <connectionName>
   agentsshcli edit-config [--config <path>]
   agentsshcli stop-editor [--config <path>]
   agentsshcli stop-daemon [--config <path>]
-  agentsshcli help [list|exec|upload|download|edit-config|stop-editor|stop-daemon]
+  agentsshcli help [list|exec|upload|download|trust-host|edit-config|stop-editor|stop-daemon]
   agentsshcli --help
   agentsshcli --version
 
@@ -63,6 +66,15 @@ const HELP_LIST: &str = r#"
   列出当前配置文件中的 SSH 连接。
 "#;
 
+const HELP_TRUST_HOST: &str = r#"
+用法:
+  agentsshcli trust-host [--config <path>] --fingerprint SHA256:<digest> <connectionName>
+  agentsshcli help trust-host
+
+说明:
+  从配置的连接读取 SSH 主机公钥，与通过可信渠道独立核实的 SHA256 指纹比对后登记到 ~/.ssh/known_hosts。
+  不认证目标机、不执行远端命令；已有不同公钥时拒绝登记，不自动覆盖旧记录。
+"#;
 const HELP_EXEC: &str = r#"
 用法:
   agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] [--pty|--no-pty] [--sudo|--su] [--json] <connectionName> <command>
@@ -175,6 +187,7 @@ pub(crate) fn run(argv: Vec<String>) -> AppResult<()> {
         "help" => print_help(args.first().map(String::as_str).unwrap_or("agentsshcli")),
         "init-config" => init_config(),
         "list" => run_list(args.to_vec()),
+        "trust-host" => run_trust_host(args.to_vec()),
         "exec" => run_exec(args.to_vec()),
         "upload" => run_upload(args.to_vec()),
         "download" => run_download(args.to_vec()),
@@ -200,6 +213,7 @@ fn print_help(name: &str) -> AppResult<()> {
         "agentsshcli" => HELP_AGENTSSHCLI,
         "list" | "sshls" => HELP_LIST,
         "exec" | "sshx" => HELP_EXEC,
+        "trust-host" => HELP_TRUST_HOST,
         "upload" | "sshupload" => HELP_UPLOAD,
         "download" | "sshdownload" => HELP_DOWNLOAD,
         "edit-config" | "stop-editor" => HELP_EDIT_CONFIG,
@@ -587,6 +601,35 @@ fn run_list(argv: Vec<String>) -> AppResult<()> {
     Ok(())
 }
 
+fn run_trust_host(argv: Vec<String>) -> AppResult<()> {
+    let global = parse_global_args(argv)?;
+    if global.help {
+        return print_help("trust-host");
+    }
+    if global.version {
+        return print_version();
+    }
+    if global.no_cache || global.cache_ttl_ms.is_some() {
+        return Err(AppError::new("trust-host 不支持 daemon 缓存参数"));
+    }
+    let mut args = global.args;
+    if args.first().is_none_or(|value| value != "--fingerprint") {
+        return Err(AppError::new("trust-host 必须在连接名前提供 --fingerprint"));
+    }
+    let fingerprint = take_option(&mut args, &["--fingerprint"])?
+        .ok_or_else(|| AppError::new("trust-host 必须提供 --fingerprint"))?;
+    ensure_no_unknown_options(&args)?;
+    let connection_name = take_positional(&mut args, "连接名")?
+        .ok_or_else(|| AppError::new("trust-host 缺少连接名"))?;
+    ensure_no_extra_positionals(&args)?;
+    let mut configs = load_config(&global.config_path)?;
+    // 目标机只握手取钥，不读取其凭据；通过跳板机时仍需解密跳板机凭据。
+    resolve_jump_password_refs(&global.config_path, &mut configs, &connection_name)?;
+    let connection = find_connection(&configs, &connection_name)?;
+    println!("{}", trust_host(&configs, connection, &fingerprint)?);
+    Ok(())
+}
+
 fn editor_global_args(argv: Vec<String>, command: &str) -> AppResult<GlobalArgs> {
     let global = parse_global_args(argv)?;
     if global.no_cache || global.cache_ttl_ms.is_some() {
@@ -855,6 +898,28 @@ fn resolve_execute_command(_configs: &[Connection], parsed: &ExecuteArgs) -> App
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn trust_host_requires_fingerprint_before_connection() {
+        let missing = run_trust_host(vec!["server".into()]).unwrap_err();
+        assert!(missing.to_string().contains("连接名前提供 --fingerprint"));
+        let misplaced = run_trust_host(vec![
+            "server".into(),
+            "--fingerprint".into(),
+            "SHA256:dummy".into(),
+        ])
+        .unwrap_err();
+        assert!(misplaced.to_string().contains("连接名前提供 --fingerprint"));
+        let duplicate = run_trust_host(vec![
+            "--fingerprint".into(),
+            "SHA256:dummy".into(),
+            "--fingerprint".into(),
+            "SHA256:dummy".into(),
+            "server".into(),
+        ])
+        .unwrap_err();
+        assert!(duplicate.to_string().contains("参数重复声明"));
+    }
 
     #[test]
     fn parse_exec_allows_cache_mode() {

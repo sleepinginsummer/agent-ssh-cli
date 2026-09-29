@@ -1,5 +1,20 @@
 # Release Notes
 
+
+## v0.6.3
+
+新增显式主机公钥登记命令，并把登记策略独立到 `host_key.rs`：
+
+- `agentsshcli trust-host --fingerprint 'SHA256:<已核实指纹>' '<连接名>'` 沿配置中的直连、SOCKS5 或跳板机路径读取目标机公钥；仅在指纹与独立核实值一致且无冲突记录时追加到 `~/.ssh/known_hosts`，不认证目标机或执行命令。
+- 指纹不符或已有不同公钥时拒绝写入；重复登记相同公钥不会追加新行。README 和项目 SKILL 同步使用方式及独立核实要求。
+- 主机密钥探测、`known_hosts` 登记与对应测试从 SSH 传输模块移入独立模块；现有建连与认证路径保持不变。
+
+验证：
+
+- `npm test` 通过：平台分支检查、编辑器契约检查与 78 项 Rust 测试（含本地握手、错误指纹及重复/冲突记录）。
+- `npm run build:native` release 构建通过，原生程序 `--version` 输出 `0.6.3`；未连接真实服务器，也未修改本机 `known_hosts`。
+- `cargo clippy --all-targets -- -D warnings` 未通过：现有 `config`、`daemon`、`editor`、`transfer` 模块存在既有 lint 告警，未在本次变更中调整。
+
 ## v0.6.2
 
 改进本机连接编辑器的密码输入体验：

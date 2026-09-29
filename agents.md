@@ -12,6 +12,7 @@ agent-ssh-cli 项目说明与发布流程，供 AI agent 与维护者使用。
   - `src/daemon.rs`：daemon 协议、进程生命周期、连接池与请求分发
   - `src/transfer.rs`：SFTP 上传下载、断点续传、目录递归
   - `src/ssh.rs`：建连与认证（直连 / SOCKS5 / 跳板机直连通道）
+  - `src/host_key.rs`：主机公钥指纹核验与 `known_hosts` 登记
   - `src/exec.rs`：远端命令执行与 sudo/su 提权编排
   - `src/privilege.rs`：提权命令字符串（纯逻辑，无 IO）
   - `src/runtime.rs`：tokio runtime 与超时封装
