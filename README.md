@@ -12,7 +12,7 @@
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white" alt="Node.js >=18"></a>
   <a href="https://www.npmjs.com/"><img src="https://img.shields.io/badge/npm-%3E%3D8-CB3837?logo=npm&logoColor=white" alt="npm >=8"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli"><img src="https://img.shields.io/badge/sys-win%2Fmac%2Flinux-0078D6" alt="sys win/mac/linux"></a>
-  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.6.3-blue" alt="release v0.6.3"></a>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.6.4-blue" alt="release v0.6.4"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
 </p>
 
@@ -124,7 +124,7 @@ AGENT_SSH_CONFIG=/path/to/config.json
 
 完整示例见 [example.config.json](example.config.json)。`~/.agent-ssh-cli/config.json` 保存真实连接信息。
 
-SSH 建连（含编辑器测试、跳板机、执行命令和文件传输）会按配置中的 `host` 与 `port` 核对本机 `~/.ssh/known_hosts`。未知或变化的服务器公钥会在发送 SSH 凭据前被拒绝，程序不会自动登记。首次连接时，先从服务器控制台或可信运维记录独立核实 SHA256 主机公钥指纹，再运行 `agentsshcli trust-host --fingerprint 'SHA256:<已核实指纹>' '<连接名>'`；可用 `--config <path>` 指定配置。命令通过同一连接路径读取目标机公钥，比对一致且无冲突记录才追加到 `known_hosts`（非 22 端口使用 `[host]:port`），不会认证目标机或执行命令。跳板机必须先登记才能连接目标机；已有不同公钥时不会覆盖，须先调查原因。
+SSH 建连（含编辑器测试、跳板机、执行命令和文件传输）会按配置中的 `host` 与 `port` 核对本机 `~/.ssh/known_hosts`。未知或变化的服务器公钥会在发送 SSH 凭据前被拒绝，程序不会自动登记。首次连接时，向用户说明目标、收到的 SHA256 指纹和首次信任的风险；用户明确确认后即可运行 `agentsshcli trust-host --fingerprint 'SHA256:<用户确认的指纹>' '<连接名>'`，不强制要求独立核实；可用 `--config <path>` 指定配置。推荐通过服务器控制台或可信运维记录核实指纹；首次连接或网络探测返回的指纹可供用户确认，但本身不能证明服务器身份。命令通过同一连接路径读取目标机公钥，比对一致且无冲突记录才追加到 `known_hosts`（非 22 端口使用 `[host]:port`），不会认证目标机或执行命令。跳板机必须先经用户确认并登记才能连接目标机；已有不同公钥时不会覆盖，须先调查原因。
 
 推荐使用可视化配置编辑器管理连接和替换密码：运行 `agentsshcli edit-config`，在浏览器中修改后保存。新密码会加密写入配置目录下的 `secrets.json`，`config.json` 只保留 `passwordRef`。页面查看已保存密码时，明文由本机后端解密，只在页面短暂显示并于 15 秒后清除。
 

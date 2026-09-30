@@ -72,7 +72,8 @@ const HELP_TRUST_HOST: &str = r#"
   agentsshcli help trust-host
 
 说明:
-  从配置的连接读取 SSH 主机公钥，与通过可信渠道独立核实的 SHA256 指纹比对后登记到 ~/.ssh/known_hosts。
+  从配置的连接读取 SSH 主机公钥，与用户明确确认的 SHA256 指纹比对后登记到 ~/.ssh/known_hosts。
+  首次信任须向用户说明风险并取得确认；推荐独立核实指纹，但不作为登记前置条件。
   不认证目标机、不执行远端命令；已有不同公钥时拒绝登记，不自动覆盖旧记录。
 "#;
 const HELP_EXEC: &str = r#"
