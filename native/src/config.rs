@@ -786,12 +786,7 @@ pub(crate) fn resolve_privilege_credentials(
                     None => connection.password.clone(),
                 };
             }
-            if connection.sudo_password.is_none() {
-                return Err(AppError::new(format!(
-                    "连接 {} 缺少 sudoPassword/sudoPasswordRef，且 SSH 认证密码不可复用",
-                    connection_name
-                )));
-            }
+            // 无可复用密码时由执行层使用 sudo -n，让远端策略决定是否允许免密提权。
         }
         PrivilegeMode::Su => {
             if connection.su_password.is_none() {
@@ -1413,6 +1408,19 @@ mod tests {
         let configs = load_config_for_execute(&path, "server", Some(PrivilegeMode::Sudo)).unwrap();
         let connection = find_connection(&configs, "server").unwrap();
         assert_eq!(connection.sudo_password.as_deref(), Some("ssh-secret"));
+    }
+
+    #[test]
+    fn sudo_allows_private_key_login_without_a_password() {
+        let (_dir, path) = write_config(
+            r#"[{"name":"server","host":"127.0.0.1","username":"opc","privateKey":"/tmp/id","privilegeEnabled":true}]"#,
+        );
+        let configs = load_config_for_execute(&path, "server", Some(PrivilegeMode::Sudo)).unwrap();
+        let connection = find_connection(&configs, "server").unwrap();
+        assert!(connection.password.is_none());
+        assert!(connection.sudo_password.is_none());
+        // 免密 sudo 不放宽 su 的独立密码要求。
+        assert!(load_config_for_execute(&path, "server", Some(PrivilegeMode::Su)).is_err());
     }
 
     #[test]

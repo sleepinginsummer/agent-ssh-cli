@@ -12,7 +12,7 @@
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white" alt="Node.js >=18"></a>
   <a href="https://www.npmjs.com/"><img src="https://img.shields.io/badge/npm-%3E%3D8-CB3837?logo=npm&logoColor=white" alt="npm >=8"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli"><img src="https://img.shields.io/badge/sys-win%2Fmac%2Flinux-0078D6" alt="sys win/mac/linux"></a>
-  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.6.4-blue" alt="release v0.6.4"></a>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.6.5-blue" alt="release v0.6.5"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
 </p>
 
@@ -126,7 +126,7 @@ AGENT_SSH_CONFIG=/path/to/config.json
 
 SSH 建连（含编辑器测试、跳板机、执行命令和文件传输）会按配置中的 `host` 与 `port` 核对本机 `~/.ssh/known_hosts`。未知或变化的服务器公钥会在发送 SSH 凭据前被拒绝，程序不会自动登记。首次连接时，向用户说明目标、收到的 SHA256 指纹和首次信任的风险；用户明确确认后即可运行 `agentsshcli trust-host --fingerprint 'SHA256:<用户确认的指纹>' '<连接名>'`，不强制要求独立核实；可用 `--config <path>` 指定配置。推荐通过服务器控制台或可信运维记录核实指纹；首次连接或网络探测返回的指纹可供用户确认，但本身不能证明服务器身份。命令通过同一连接路径读取目标机公钥，比对一致且无冲突记录才追加到 `known_hosts`（非 22 端口使用 `[host]:port`），不会认证目标机或执行命令。跳板机必须先经用户确认并登记才能连接目标机；已有不同公钥时不会覆盖，须先调查原因。
 
-推荐使用可视化配置编辑器管理连接和替换密码：运行 `agentsshcli edit-config`，在浏览器中修改后保存。新密码会加密写入配置目录下的 `secrets.json`，`config.json` 只保留 `passwordRef`。页面查看已保存密码时，明文由本机后端解密，只在页面短暂显示并于 15 秒后清除。
+推荐使用可视化配置编辑器管理连接和替换密码：运行 `agentsshcli edit-config`，在浏览器中修改后保存。新密码会加密写入配置目录下的 `secrets.json`，`config.json` 只保留 `passwordRef`。页面查看已保存密码时，明文由本机后端解密，只在页面短暂显示并于 15 秒后清除。测试连接遇到未知服务器公钥时，页面会弹出服务器地址与 SHA256 指纹；点击“信任并重试”后，后端重新比对指纹、登记到本机 `known_hosts` 并重新测试。取消不会登记，已有不同公钥不会提供覆盖授权；跳板机和目标机分别确认。
 
 为兼容旧配置，CLI 仍支持明文凭据的被动迁移：首次写入 `password` 后，执行 `exec`、`upload` 或 `download` 连接该服务器时，会生成本地 `secret.key`，把密码加密保存到 `secrets.json`，并将配置中的明文字段替换为 `passwordRef`。sudo/su 明文凭据采用相同规则，但只在首次使用对应 flag 时迁移，密文 key 分别为 `agentsshcli:<name>:sudo` 和 `agentsshcli:<name>:su`。提权必须显式设置 `privilegeEnabled: true`。
 
@@ -236,7 +236,7 @@ agentsshcli exec --sudo 业务服务器 "systemctl status app"
 agentsshcli exec --su 业务服务器 "id && pwd"
 ```
 
-`--sudo` 和 `--su` 互斥。两种模式都只支持非交互命令，密码发送后会关闭远端 stdin；目标命令不能继续读取 stdin。sudo 会优先使用独立 sudo 凭据，缺失时复用 SSH 密码；私钥登录无法复用密码，必须配置独立 sudo 凭据。
+`--sudo` 和 `--su` 互斥。两种模式都只支持非交互命令，密码发送后会关闭远端 stdin；目标命令不能继续读取 stdin。sudo 会优先使用独立 sudo 凭据，缺失时复用 SSH 密码；没有可用密码时使用 `sudo -n`，支持远端 `NOPASSWD` 或有效的 sudo 认证缓存。远端仍要求密码时会立即返回错误，不等待输入。私钥登录且远端要求密码时，需配置独立 sudo 凭据。
 
 测试命令
 

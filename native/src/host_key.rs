@@ -1,4 +1,4 @@
-// 主机密钥登记：独立核实指纹后，通过 SSH 握手取得公钥并写入 known_hosts。
+// 主机密钥登记：用户明确确认指纹后，通过 SSH 握手取得公钥并写入 known_hosts。
 // SSH 通道与握手配置仍由 ssh 模块负责；此处不认证目标机或执行命令。
 
 use crate::config::{home_dir, Connection};
@@ -8,6 +8,16 @@ use russh::client;
 use russh::keys::ssh_key::{Fingerprint, HashAlg, PublicKey};
 use std::path::Path;
 use std::sync::Arc;
+
+// 未知主机挑战来自被拒绝的握手，供编辑器显示，不代表已信任该服务器。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UnknownHostKey {
+    pub connection: String,
+    pub host: String,
+    pub port: u16,
+    pub fingerprint: String,
+}
 
 struct HostKeyProbe {
     key_sender: Option<tokio::sync::oneshot::Sender<PublicKey>>,

@@ -4,8 +4,8 @@
 // `privilege.rs` 只负责生成提权命令行字符串。
 
 use crate::privilege::{
-    su_command, su_pty_command, sudo_command, sudo_requires_tty, PrivilegeMode, SUDO_PROMPT_MARKER,
-    SUDO_REQUIRE_TTY_PROBE, SU_PTY_PROBE,
+    su_command, su_pty_command, sudo_command, sudo_passwordless_command, sudo_requires_tty,
+    PrivilegeMode, SUDO_PROMPT_MARKER, SUDO_REQUIRE_TTY_PROBE, SU_PTY_PROBE,
 };
 use crate::runtime::run_with_timeout;
 use crate::ssh::{connect_russh, RusshClient};
@@ -205,10 +205,6 @@ async fn execute_sudo_command_async(
     remote_command: &str,
     pty: bool,
 ) -> AppResult<ExecOutput> {
-    let password = connection
-        .sudo_password
-        .as_deref()
-        .ok_or_else(|| AppError::new("sudo 凭据尚未解密"))?;
     let mut use_pty = pty;
     if !use_pty {
         let probe = execute_remote_command_with_session_async(
@@ -221,9 +217,21 @@ async fn execute_sudo_command_async(
         .await?;
         use_pty = sudo_requires_tty(&probe.stdout, &probe.stderr);
     }
-    let command = sudo_command(&connection.sudo_user, remote_command, use_pty);
-    let input = password_input(password, use_pty.then_some(SUDO_PROMPT_MARKER))?;
-    execute_remote_command_with_session_async(session, connection, &command, use_pty, Some(input))
+    let (command, input) = match connection.sudo_password.as_deref() {
+        Some(password) => (
+            sudo_command(&connection.sudo_user, remote_command, use_pty),
+            Some(password_input(
+                password,
+                use_pty.then_some(SUDO_PROMPT_MARKER),
+            )?),
+        ),
+        // 无密码时不写入 stdin；NOPASSWD 或有效 sudo 缓存由远端自行判断。
+        None => (
+            sudo_passwordless_command(&connection.sudo_user, remote_command),
+            None,
+        ),
+    };
+    execute_remote_command_with_session_async(session, connection, &command, use_pty, input)
         .await
 }
 

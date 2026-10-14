@@ -61,6 +61,15 @@ pub fn sudo_command(user: &str, command: &str, use_pty: bool) -> String {
     )
 }
 
+// 未配置密码时使用非交互模式，远端需要认证则立即失败，不等待密码提示。
+pub fn sudo_passwordless_command(user: &str, command: &str) -> String {
+    format!(
+        "sudo -n -u {} -- sh -c {}",
+        user,
+        shell_single_quote(&inner_command(command))
+    )
+}
+
 pub fn su_pty_command(user: &str, command: &str) -> String {
     format!(
         "su -P -c {} {}",
@@ -112,6 +121,14 @@ mod tests {
         assert_eq!(
             command,
             "sudo -S -p '' -u root -- sh -c 'exec </dev/null; id && cat /root/file'"
+        );
+    }
+
+    #[test]
+    fn passwordless_sudo_is_noninteractive_and_wraps_the_complete_command() {
+        assert_eq!(
+            sudo_passwordless_command("app-user", "id && echo 'hello'"),
+            "sudo -n -u app-user -- sh -c 'exec </dev/null; id && echo '\"'\"'hello'\"'\"''"
         );
     }
 

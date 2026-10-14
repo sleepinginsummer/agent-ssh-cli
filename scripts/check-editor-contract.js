@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
@@ -142,4 +143,88 @@ for (const rule of defaultRules) {
   }
 }
 
-console.log(`编辑器前端配置契约检查通过（${cases.length} 个样例）`);
+// 编译整个页面脚本，并验证首次信任流程的关键异步边界。
+new vm.Script(html.match(/<script>([\s\S]*?)<\/script>/)[1]);
+const trustFlowSource = extractSection("    function hostTrustRequest(", "    async function testConnection()", "主机信任流程");
+const challenge = { connection: "server", host: "127.0.0.1", port: 22, fingerprint: "SHA256:test" };
+async function checkTrustFlow({ responses, approved = true, invalidateAt, failAt, snapshot = { connection: "server", connections: [{ name: "server", host: "127.0.0.1" }], passwordUpdates: [] } }) {
+  const requests = [];
+  const statuses = [];
+  let valid = true;
+  const flowContext = vm.createContext({
+    apiRequest: async (url, options) => {
+      const body = JSON.parse(options.body);
+      requests.push({ url, body });
+      // 按后端的连接范围约束拒绝无关草稿，避免模拟成功掩盖授权请求冲突。
+      const target = body.connections.find(item => item.name === body.connection);
+      if (body.passwordUpdates.some(update => update.connection !== body.connection && update.connection !== target?.jumpHost)) {
+        throw new Error("临时密码只能用于当前连接或跳板机");
+      }
+      if (invalidateAt === requests.length) valid = false;
+      if (failAt === requests.length) throw new Error("登记失败");
+      return responses.shift();
+    },
+    confirmHostTrust: async () => {
+      if (invalidateAt === "confirm") valid = false;
+      return approved;
+    },
+    setTestStatus: (...args) => statuses.push(args)
+  });
+  vm.runInContext(`${trustFlowSource}; this.run = testAndTrustConnection;`, flowContext);
+  let error;
+  try {
+    await flowContext.run(snapshot, () => valid);
+  } catch (caught) { error = caught.message; }
+  return { requests, statuses, error };
+}
+const unknown = () => ({ ok: false, unknownHostKey: challenge });
+const accepted = await checkTrustFlow({ responses: [unknown(), { ok: true }, { ok: true }] });
+assert.deepEqual(accepted.requests.map(item => item.url), ["/api/connections/test", "/api/connections/trust-host", "/api/connections/test"]);
+assert.equal(accepted.requests[1].body.fingerprint, challenge.fingerprint);
+assert.deepEqual(accepted.requests[0].body, accepted.requests[2].body);
+assert.deepEqual(accepted.statuses.at(-1), ["连接成功", "success"]);
+const cancelled = await checkTrustFlow({ responses: [unknown()], approved: false });
+assert.equal(cancelled.requests.length, 1);
+assert.match(cancelled.statuses.at(-1)[0], /已取消信任/);
+for (const invalidateAt of [1, "confirm", 2]) {
+  const stale = await checkTrustFlow({ responses: [unknown(), { ok: true }], invalidateAt });
+  assert.equal(stale.requests.length, invalidateAt === 2 ? 2 : 1);
+  assert.ok(!stale.statuses.some(([message]) => message === "连接成功"));
+}
+const changed = await checkTrustFlow({ responses: [{ ok: false, error: "公钥不符" }] });
+assert.equal(changed.requests.length, 1);
+assert.deepEqual(changed.statuses.at(-1), ["连接失败：公钥不符", "failure"]);
+const failed = await checkTrustFlow({ responses: [unknown()], failAt: 2 });
+assert.equal(failed.error, "登记失败");
+assert.equal(failed.requests.length, 2);
+const jumpSnapshot = {
+  connection: "server",
+  connections: [
+    { name: "server", host: "127.0.0.1", jumpHost: "jump" },
+    { name: "jump", host: "127.0.0.2" }
+  ],
+  passwordUpdates: [
+    { connection: "server", password: "target-draft" },
+    { connection: "jump", password: "jump-draft" }
+  ]
+};
+const jumpBefore = structuredClone(jumpSnapshot);
+const jump = await checkTrustFlow({ responses: [{ ok: false, unknownHostKey: { ...challenge, connection: "jump" } }, { ok: true }, unknown(), { ok: true }, { ok: true }], snapshot: jumpSnapshot });
+assert.equal(jump.error, undefined);
+assert.equal(jump.requests[1].body.connection, "jump");
+assert.deepEqual(jump.requests[1].body.passwordUpdates, [jumpBefore.passwordUpdates[1]]);
+assert.equal(jump.requests[3].body.connection, "server");
+assert.deepEqual(jump.requests[3].body.passwordUpdates, jumpBefore.passwordUpdates);
+assert.deepEqual(jump.requests[0].body, jump.requests[2].body);
+assert.deepEqual(jump.requests[0].body, jump.requests[4].body);
+assert.deepEqual(jumpSnapshot, jumpBefore);
+assert.deepEqual(jump.statuses.at(-1), ["连接成功", "success"]);
+const targetDraftOnly = await checkTrustFlow({
+  responses: [{ ok: false, unknownHostKey: { ...challenge, connection: "jump" } }, { ok: true }, { ok: true }],
+  snapshot: { ...jumpBefore, passwordUpdates: [jumpBefore.passwordUpdates[0]] }
+});
+assert.equal(targetDraftOnly.error, undefined);
+assert.deepEqual(targetDraftOnly.requests[1].body.passwordUpdates, []);
+assert.deepEqual(targetDraftOnly.requests[2].body.passwordUpdates, [jumpBefore.passwordUpdates[0]]);
+assert.deepEqual(targetDraftOnly.statuses.at(-1), ["连接成功", "success"]);
+console.log(`编辑器前端配置契约检查通过（${cases.length} 个样例，含主机信任流程）`);

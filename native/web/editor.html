@@ -18,6 +18,12 @@
       --font-display: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif;
       --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
     }
+    .host-trust-dialog { width: min(480px, calc(100vw - 32px)); padding: 24px; border: 1px solid var(--line-dark); border-radius: var(--radius); background: var(--surface); color: var(--ink); }
+    .host-trust-dialog::backdrop { background: rgba(0, 0, 0, .65); }
+    .host-trust-dialog h2 { margin: 0 0 16px; font-size: 18px; }
+    .host-trust-dialog p { color: var(--muted-strong); }
+    .host-trust-dialog code { display: block; padding: 12px; background: var(--code); overflow-wrap: anywhere; user-select: text; font-family: var(--font-mono); }
+    .host-trust-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
     html, body { height: 100%; }
@@ -407,6 +413,19 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"><span class="toast-mark"><svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg></span><span id="toast-text"></span></div>
+
+  <dialog class="host-trust-dialog" id="host-trust-dialog" aria-labelledby="host-trust-title" aria-describedby="host-trust-risk">
+    <form method="dialog">
+      <h2 id="host-trust-title">信任服务器公钥</h2>
+      <p id="host-trust-endpoint"></p>
+      <code id="host-trust-fingerprint"></code>
+      <p id="host-trust-risk">首次信任可能存在服务器冒充风险。建议通过服务器控制台或可信记录核对指纹，确认后将登记到本机 known_hosts。</p>
+      <div class="host-trust-actions">
+        <button class="btn" value="cancel" autofocus>取消</button>
+        <button class="btn primary" value="trust">信任并重试</button>
+      </div>
+    </form>
+  </dialog>
 
   <script>
     const seed = [
@@ -1228,6 +1247,54 @@
       }
     }
 
+    function confirmHostTrust(challenge) {
+      const dialog = $("#host-trust-dialog");
+      $("#host-trust-endpoint").textContent = `${challenge.connection} · ${challenge.host}:${challenge.port}`;
+      $("#host-trust-fingerprint").textContent = challenge.fingerprint;
+      dialog.returnValue = "cancel";
+      return new Promise(resolve => {
+        dialog.addEventListener("close", () => resolve(dialog.returnValue === "trust"), { once: true });
+        dialog.showModal();
+      });
+    }
+
+    function hostTrustRequest(snapshot, challenge) {
+      const target = snapshot.connections.find(item => item.name === challenge.connection);
+      // 授权跳板机时排除原目标的密码草稿，原快照仍用于后续测试。
+      const passwordUpdates = snapshot.passwordUpdates.filter(update =>
+        update.connection === challenge.connection || update.connection === target?.jumpHost
+      );
+      return { ...snapshot, connection: challenge.connection, fingerprint: challenge.fingerprint, passwordUpdates };
+    }
+
+    // 每个异步边界后检查快照有效性，过期结果不再影响当前连接。
+    async function testAndTrustConnection(snapshot, isCurrent) {
+      while (isCurrent()) {
+        const result = await apiRequest("/api/connections/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(snapshot)
+        });
+        if (!isCurrent()) return;
+        if (result.ok || !result.unknownHostKey) {
+          setTestStatus(result.ok ? "连接成功" : `连接失败：${result.error}`, result.ok ? "success" : "failure");
+          return;
+        }
+        setTestStatus("等待确认服务器公钥");
+        const approved = await confirmHostTrust(result.unknownHostKey);
+        if (!isCurrent()) return;
+        if (!approved) return setTestStatus("已取消信任，未登记服务器公钥", "failure");
+        setTestStatus("正在登记服务器公钥...");
+        await apiRequest("/api/connections/trust-host", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(hostTrustRequest(snapshot, result.unknownHostKey))
+        });
+        if (!isCurrent()) return;
+        setTestStatus("正在重新连接...");
+      }
+    }
+
     async function testConnection() {
       if (jsonSource.classList.contains("active") && !applySource()) return;
       const target = current();
@@ -1239,6 +1306,7 @@
       }
       if (location.protocol === "file:") return setTestStatus("文件预览模式无法测试连接", "failure");
       const version = editVersion;
+      const isCurrent = () => current() === target && editVersion === version;
       const passwordUpdates = testItems.flatMap(item => {
         const state = secretUi.get(item);
         return state?.mode === "draft" && state.draftValue
@@ -1249,15 +1317,11 @@
       button.querySelector("span").textContent = "测试中...";
       setTestStatus("正在连接...");
       try {
-        const result = await apiRequest("/api/connections/test", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ connections: testItems, connection: target.name, passwordUpdates })
-        });
-        if (current() !== target || editVersion !== version) return;
-        setTestStatus(result.ok ? "连接成功" : `连接失败：${result.error}`, result.ok ? "success" : "failure");
+        // 固定测试快照，信任与重试均使用同一份配置，避免登记到后来修改的地址。
+        const snapshot = structuredClone({ connections: testItems, connection: target.name, passwordUpdates });
+        await testAndTrustConnection(snapshot, isCurrent);
       } catch (error) {
-        if (current() === target && editVersion === version) setTestStatus(`连接失败：${error.message}`, "failure");
+        if (isCurrent()) setTestStatus(`连接失败：${error.message}`, "failure");
       } finally {
         button.disabled = false;
         button.querySelector("span").textContent = "测试连接";

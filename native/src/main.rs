@@ -14,13 +14,13 @@ use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Debug, Clone)]
-struct AppError(String);
+struct AppError(String, Option<host_key::UnknownHostKey>);
 
 type AppResult<T> = Result<T, AppError>;
 
 impl AppError {
     fn new(message: impl Into<String>) -> Self {
-        Self(message.into())
+        Self(message.into(), None)
     }
 }
 

@@ -181,6 +181,7 @@ pub(crate) struct RusshClient {
     host: String,
     port: u16,
     known_hosts_path: PathBuf,
+    key_sender: Option<tokio::sync::oneshot::Sender<String>>,
 }
 
 impl client::Handler for RusshClient {
@@ -191,13 +192,30 @@ impl client::Handler for RusshClient {
         server_public_key: &russh::keys::ssh_key::PublicKey,
     ) -> Result<bool, Self::Error> {
         // 在密码或私钥认证前核对目标与跳板机各自的主机公钥；未知主机不得自动信任。
-        russh::keys::known_hosts::check_known_hosts_path(
+        let result = russh::keys::known_hosts::check_known_hosts_path(
             &self.host,
             self.port,
             server_public_key,
             &self.known_hosts_path,
-        )
-        .map_err(Into::into)
+        );
+        // 仅暴露首次连接的指纹；校验仍返回 false，认证前中止握手。
+        if matches!(result, Ok(false))
+            && russh::keys::known_hosts::known_host_keys_path(
+                &self.host,
+                self.port,
+                &self.known_hosts_path,
+            )?
+            .is_empty()
+        {
+            if let Some(sender) = self.key_sender.take() {
+                let _ = sender.send(
+                    server_public_key
+                        .fingerprint(russh::keys::ssh_key::HashAlg::Sha256)
+                        .to_string(),
+                );
+            }
+        }
+        result.map_err(Into::into)
     }
 }
 
@@ -304,21 +322,34 @@ async fn connect_russh_over_stream(
         .ok_or_else(|| AppError::new("无法确定用户主目录，不能校验 SSH 服务器公钥"))?
         .join(".ssh")
         .join("known_hosts");
+    let (key_sender, mut key_receiver) = tokio::sync::oneshot::channel();
     let handler = RusshClient {
         host: connection.host.clone(),
         port: connection.port,
         known_hosts_path: known_hosts_path.clone(),
+        key_sender: Some(key_sender),
     };
     let mut session = client::connect_stream(Arc::new(config), stream, handler)
         .await
         .map_err(|error| match error {
-            russh::Error::UnknownKey => AppError::new(format!(
-                "连接 {} 的服务器公钥未在 {} 登记（{}:{}）；请先独立核实服务器指纹并登记",
-                connection.name,
-                known_hosts_path.display(),
-                connection.host,
-                connection.port
-            )),
+            russh::Error::UnknownKey => {
+                let mut error = AppError::new(format!(
+                    "连接 {} 的服务器公钥未在 {} 登记（{}:{}）；请确认服务器指纹并登记",
+                    connection.name,
+                    known_hosts_path.display(),
+                    connection.host,
+                    connection.port
+                ));
+                error.1 = key_receiver.try_recv().ok().map(|fingerprint| {
+                    crate::host_key::UnknownHostKey {
+                        connection: connection.name.clone(),
+                        host: connection.host.clone(),
+                        port: connection.port,
+                        fingerprint,
+                    }
+                });
+                error
+            }
             russh::Error::Keys(russh::keys::Error::KeyChanged { line }) => AppError::new(format!(
                 "连接 {} 的服务器公钥与 {} 第 {} 行不符；请先核实服务器身份，勿直接覆盖旧记录",
                 connection.name,
@@ -431,6 +462,51 @@ mod tests {
     use serde::Deserialize;
 
     #[test]
+    fn unknown_host_challenge_does_not_trust_or_offer_replacing_existing_keys() {
+        use russh::client::Handler as _;
+        use russh::keys::ssh_key::HashAlg;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("known_hosts");
+        let key: russh::keys::PrivateKey =
+            russh::keys::ssh_key::private::Ed25519Keypair::from_seed(&[11; 32]).into();
+        let other: russh::keys::PrivateKey =
+            russh::keys::ssh_key::private::Ed25519Keypair::from_seed(&[12; 32]).into();
+        let (sender, mut receiver) = tokio::sync::oneshot::channel();
+        let mut handler = RusshClient {
+            host: "localhost".into(),
+            port: 22,
+            known_hosts_path: path.clone(),
+            key_sender: Some(sender),
+        };
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        assert!(!runtime
+            .block_on(handler.check_server_key(key.public_key()))
+            .unwrap());
+        assert_eq!(
+            receiver.try_recv().unwrap(),
+            key.public_key().fingerprint(HashAlg::Sha256).to_string()
+        );
+        assert!(!path.exists());
+
+        std::fs::write(
+            &path,
+            format!("localhost {}\n", key.public_key().to_openssh().unwrap()),
+        )
+        .unwrap();
+        let (sender, mut receiver) = tokio::sync::oneshot::channel();
+        handler.key_sender = Some(sender);
+        assert!(runtime
+            .block_on(handler.check_server_key(other.public_key()))
+            .is_err());
+        assert!(receiver.try_recv().is_err());
+        assert!(runtime
+            .block_on(handler.check_server_key(key.public_key()))
+            .unwrap());
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
     fn server_key_requires_matching_known_host_and_port() {
         use russh::client::Handler as _;
 
@@ -453,6 +529,7 @@ mod tests {
             host: "localhost".into(),
             port: 13265,
             known_hosts_path,
+            key_sender: None,
         };
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -542,10 +619,52 @@ mod tests {
                 Ok(russh::server::Auth::reject())
             }
         }
+
+        async fn channel_open_session(
+            &mut self,
+            _channel: russh::Channel<russh::server::Msg>,
+            _session: &mut russh::server::Session,
+        ) -> Result<bool, Self::Error> {
+            Ok(true)
+        }
+
+        async fn exec_request(
+            &mut self,
+            channel: russh::ChannelId,
+            data: &[u8],
+            session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            let command = std::str::from_utf8(data).unwrap();
+            session.channel_success(channel)?;
+            let code = match command {
+                "sudo -n -u root -- sh -c 'exec </dev/null; id -u'" => {
+                    session.data(channel, "0\n")?;
+                    0
+                }
+                "sudo -n true" | "sudo -n -u root -- sh -c 'exec </dev/null; denied'" => {
+                    session.extended_data(channel, 1, "sudo: a password is required\n")?;
+                    1
+                }
+                _ => panic!("非预期的 sudo 命令: {}", command),
+            };
+            session.exit_status_request(channel, code)?;
+            session.eof(channel)?;
+            session.close(channel)?;
+            Ok(())
+        }
+
+        async fn data(
+            &mut self,
+            _channel: russh::ChannelId,
+            _data: &[u8],
+            _session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            panic!("免密码 sudo 不应发送密码数据");
+        }
     }
 
     #[test]
-    fn registered_server_key_allows_password_authentication() {
+    fn registered_server_key_allows_authentication_and_passwordless_sudo() {
         let directory = tempfile::tempdir().unwrap();
         let known_hosts_path = directory.path().join("known_hosts");
         let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -588,11 +707,28 @@ mod tests {
                 host: connection.host.clone(),
                 port: connection.port,
                 known_hosts_path,
+                key_sender: None,
             };
             let mut client = client::connect_stream(Arc::new(client::Config::default()), stream, handler)
                 .await
                 .unwrap();
             authenticate_russh(connection, &mut client).await.unwrap();
+            // 走真实 SSH channel，验证免密分支与需要密码时的非零退出码。
+            for (command, expected_code) in [("id -u", 0), ("denied", 1)] {
+                let output = tokio::time::timeout(
+                    Duration::from_secs(3),
+                    crate::exec::execute_remote_command_with_privilege_async(
+                        &client, connection, command, false,
+                        Some(crate::privilege::PrivilegeMode::Sudo),
+                    ),
+                ).await.unwrap().unwrap();
+                assert_eq!(output.exit_code, expected_code);
+                if expected_code == 0 {
+                    assert_eq!(output.stdout, "0");
+                } else {
+                    assert!(output.stderr.contains("a password is required"));
+                }
+            }
             client
                 .disconnect(russh::Disconnect::ByApplication, "", "")
                 .await

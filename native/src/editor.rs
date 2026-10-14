@@ -75,6 +75,8 @@ struct TestConnectionRequest {
     connection: String,
     #[serde(default)]
     password_updates: Vec<PasswordUpdate>,
+    #[serde(default)]
+    fingerprint: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -226,6 +228,12 @@ fn handle_connection_test(
         prepare_editor_test_connections(config_path, &payload.connections, name, &updates)
             .map_err(ApiFailure::bad_request)?;
     let target = find_connection(&configs, name).map_err(ApiFailure::bad_request)?;
+    if let Some(fingerprint) = payload.fingerprint {
+        eprintln!("配置编辑器登记 SSH 主机公钥: {} {}", name, fingerprint);
+        let message = crate::host_key::trust_host(&configs, target, &fingerprint)
+            .map_err(ApiFailure::bad_request)?;
+        return Ok(serde_json::json!({"ok": true, "message": message}));
+    }
     eprintln!("配置编辑器测试 SSH 连接: {}", name);
     let result = run_with_timeout(15_000, async {
         let session = connect_russh(&configs, target).await?;
@@ -241,7 +249,7 @@ fn handle_connection_test(
         Ok(()) => serde_json::json!({"ok": true}),
         Err(error) => {
             eprintln!("配置编辑器 SSH 测试失败: {}", error);
-            serde_json::json!({"ok": false, "error": error.to_string()})
+            serde_json::json!({"ok": false, "error": error.to_string(), "unknownHostKey": error.1})
         }
     })
 }
@@ -299,7 +307,19 @@ fn handle_connection(
     }
 
     // SSH 握手可能等待网络超时，复制响应流交给线程，避免阻塞串行 accept 循环。
-    if request.method == "POST" && request.path == "/api/connections/test" {
+    if request.method == "POST"
+        && matches!(
+            request.path.as_str(),
+            "/api/connections/test" | "/api/connections/trust-host"
+        )
+    {
+        // 信任接口必须携带用户确认的指纹；测试接口不能通过夹带字段写入信任记录。
+        let payload: TestConnectionRequest = serde_json::from_slice(&request.body)?;
+        let trusting = request.path == "/api/connections/trust-host";
+        if trusting != payload.fingerprint.is_some() {
+            write_json_error(stream, 400, "信任接口必须提供指纹，测试接口不能提供指纹")?;
+            return Ok(ConnectionOutcome::Activity);
+        }
         let Some(slot) = TestSlot::acquire() else {
             write_json_error(stream, 409, "已有连接正在测试，请稍后再试")?;
             return Ok(ConnectionOutcome::Activity);
@@ -365,6 +385,68 @@ mod tests {
         assert_eq!(payload.password_updates.len(), 1);
         assert_eq!(payload.password_updates[0].connection, "server");
         assert_eq!(payload.password_updates[0].password, "new-secret");
+    }
+
+    #[test]
+    fn connection_test_returns_unknown_host_fingerprint_before_authentication() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        struct UnauthenticatedServer;
+        impl russh::server::Handler for UnauthenticatedServer {
+            type Error = russh::Error;
+
+            async fn auth_password(
+                &mut self,
+                _user: &str,
+                _password: &str,
+            ) -> Result<russh::server::Auth, Self::Error> {
+                panic!("未知主机不得收到密码认证");
+            }
+        }
+        let key: russh::keys::PrivateKey =
+            russh::keys::ssh_key::private::Ed25519Keypair::from_seed(&[13; 32]).into();
+        let fingerprint = key
+            .public_key()
+            .fingerprint(russh::keys::ssh_key::HashAlg::Sha256)
+            .to_string();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || {
+            tokio::runtime::Runtime::new().unwrap().block_on(async {
+                let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                let (stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let mut config = russh::server::Config::default();
+                config.keys.push(key);
+                // 客户端拒绝主机公钥后主动关闭，服务端无需完成认证。
+                if let Ok(session) =
+                    russh::server::run_stream(Arc::new(config), stream, UnauthenticatedServer).await
+                {
+                    let _ = tokio::time::timeout(Duration::from_secs(5), session)
+                        .await
+                        .unwrap();
+                }
+            });
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let body = serde_json::to_vec(&serde_json::json!({
+            "connection": "server",
+            "connections": [{"name":"server","host":"127.0.0.1","port":port,"username":"test","passwordRef":"agentsshcli:server"}],
+            "passwordUpdates": [{"connection":"server","password":"draft-secret"}]
+        })).unwrap();
+        let response =
+            handle_connection_test(&body, &directory.path().join("config.json")).unwrap();
+        server.join().unwrap();
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["unknownHostKey"]["connection"], "server");
+        assert_eq!(response["unknownHostKey"]["host"], "127.0.0.1");
+        assert_eq!(response["unknownHostKey"]["port"], port);
+        assert_eq!(response["unknownHostKey"]["fingerprint"], fingerprint);
+        assert!(!directory.path().join("config.json").exists());
     }
 
     #[test]

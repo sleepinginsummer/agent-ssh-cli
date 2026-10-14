@@ -284,7 +284,7 @@ agentsshcli exec --su "<connectionName>" "id && pwd"
 - 禁止把 `sudo`、`sudo -S`、`sudo -n`、`su` 或 `su -c` 拼入 `<command>`；这种写法绕过 CLI 的提权密码通道，可能等待交互输入或错误判断为工具不支持密码。
 - 不得因为普通 `su -c` 超时就判断 `agentsshcli` 无法响应密码提示；`agentsshcli 0.5.0+` 会通过 SSH channel stdin 自动发送配置中的加密凭据。
 - `--su --json` 成功时，`stderr` 可能仍包含远端 `Password:` 提示文字；该提示不包含真实密码，也不代表认证失败。必须结合 JSON `exitCode` 和 `stdout` 中的 `whoami`/`id -u` 判断结果。
-- 使用前确认连接配置 `privilegeEnabled: true`，sudo/su 目标用户和凭据字段已配置。
+- 使用前确认连接配置 `privilegeEnabled: true`，目标用户已配置；su 必须有独立密码，sudo 无可用密码时支持远端免密策略。
 
 正确写法：
 
@@ -327,7 +327,7 @@ agentsshcli exec --no-cache --connection "<connectionName>" --command "<command>
 - `--no-cache`: 不复用连接，必须放在连接名或 `--connection` 前
 - `--cache-ttl <ms>`: 连接缓存空闲毫秒数，必须放在连接名或 `--connection` 前
 
-提权模式只支持非交互命令：CLI 通过 SSH channel stdin 发送密码后关闭 stdin，目标命令不能继续读取输入。sudo 独立凭据缺失时可复用 SSH 密码；私钥登录必须配置 `sudoPassword`/`sudoPasswordRef`。su 始终要求独立的目标用户密码。
+提权模式只支持非交互命令：CLI 通过 SSH channel stdin 发送密码后关闭 stdin，目标命令不能继续读取输入。sudo 独立凭据缺失时可复用 SSH 密码；无可用密码时使用非交互 `sudo -n`，支持远端 `NOPASSWD` 或有效认证缓存，需要密码则立即失败。私钥登录且远端要求密码时需配置 `sudoPassword`/`sudoPasswordRef`。su 始终要求独立的目标用户密码。
 
 使用 `--command-file` 时，必须确保脚本文件是 LF 换行。CRLF 文件会把 `\r` 传到远端 bash，可能导致 `$'xxx\r': command not found`。
 
