@@ -20,6 +20,8 @@
     "agentsshcli": "bin/agentsshcli.js"
   },
   "scripts": {
+    "sync-version": "node scripts/sync-version.mjs",
+    "version": "node scripts/sync-version.mjs",
     "test": "node --check bin/agentsshcli.js && node scripts/check-cfg-ports.js && node scripts/check-editor-contract.js && cargo test --manifest-path native/Cargo.toml",
     "build:native": "cargo build --release --manifest-path native/Cargo.toml",
     "test:native": "cargo test --manifest-path native/Cargo.toml",
