@@ -640,9 +640,12 @@ mod tests {
         .unwrap();
 
         let root = "GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n";
-        assert_eq!(
-            route_response_with_outcome(root, &path).1,
-            ConnectionOutcome::Ignored
+        let (root_response, root_outcome) = route_response_with_outcome(root, &path);
+        assert_eq!(root_outcome, ConnectionOutcome::Ignored);
+        let (headers, html) = root_response.split_once("\r\n\r\n").unwrap();
+        assert!(headers.contains("img-src 'self' data:;"));
+        assert!(
+            html.contains("<link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml,")
         );
         let (malformed_response, malformed_outcome) =
             route_response_with_outcome("broken\r\n\r\n", &path);
