@@ -32,6 +32,8 @@ const PASSWORD_REF_PREFIX: &str = "agentsshcli:";
 #[serde(rename_all = "camelCase")]
 struct RawConnection {
     name: Option<String>,
+    group: Option<String>,
+    tags: Option<Vec<String>>,
     host: Option<String>,
     port: Option<u16>,
     username: Option<String>,
@@ -62,6 +64,8 @@ struct PatternRule {
 #[derive(Debug, Clone)]
 pub(crate) struct Connection {
     pub(crate) name: String,
+    pub(crate) group: Option<String>,
+    pub(crate) tags: Vec<String>,
     pub(crate) host: String,
     pub(crate) port: u16,
     pub(crate) username: String,
@@ -237,6 +241,15 @@ struct NormalizedPrivilege {
     su_password_ref: Option<String>,
 }
 
+// 分类只用于展示与筛选：空白标签忽略，去重时保留用户输入顺序和大小写。
+fn normalize_tags(tags: Option<Vec<String>>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    tags.unwrap_or_default()
+        .into_iter()
+        .map(|tag| tag.trim().to_string())
+        .filter(|tag| !tag.is_empty() && seen.insert(tag.clone()))
+        .collect()
+}
 fn normalize_entry(entry: RawConnection, index: usize) -> AppResult<Connection> {
     let endpoint = normalize_endpoint(&entry, index)?;
     let auth = normalize_auth(&entry, index)?;
@@ -245,6 +258,11 @@ fn normalize_entry(entry: RawConnection, index: usize) -> AppResult<Connection> 
     let _ = ensure_string_array(entry.allowed_local_paths, "allowedLocalPaths", index)?;
     Ok(Connection {
         name: endpoint.name,
+        group: entry
+            .group
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        tags: normalize_tags(entry.tags),
         host: endpoint.host,
         port: endpoint.port,
         username: endpoint.username,
@@ -1339,6 +1357,70 @@ mod tests {
     use crate::test_support::write_config;
     use std::time::Duration;
 
+    #[test]
+    fn editor_roundtrip_preserves_classification_and_credentials() {
+        let (_dir, path) = write_config(
+            r#"[{"name":"server","host":"host","username":"root","password":"secret","group":"华东\n生产","tags":["应用","上海"]}]"#,
+        );
+        prepare_editor_config(&path).unwrap();
+        let mut document = read_editor_config(&path).unwrap();
+        assert_eq!(document.connections[0]["group"], "华东\n生产");
+        assert_eq!(
+            document.connections[0]["tags"],
+            serde_json::json!(["应用", "上海"])
+        );
+        document.connections[0]["host"] = serde_json::json!("new-host");
+        save_editor_config(&path, document.connections.clone(), &document.hash, &[]).unwrap();
+        document = read_editor_config(&path).unwrap();
+        assert_eq!(document.connections[0]["group"], "华东\n生产");
+        assert_eq!(
+            load_config(&path).unwrap()[0].group.as_deref(),
+            Some("华东\n生产")
+        );
+        document.connections[0]["group"] = serde_json::json!("测试环境");
+        document.connections[0]["tags"] = serde_json::json!(["应用", "北京"]);
+        save_editor_config(&path, document.connections, &document.hash, &[]).unwrap();
+        let configs = load_config_for_connection(&path, "server").unwrap();
+        assert_eq!(configs[0].group.as_deref(), Some("测试环境"));
+        assert_eq!(configs[0].tags, ["应用", "北京"]);
+        assert_eq!(configs[0].password.as_deref(), Some("secret"));
+        let mut document = read_editor_config(&path).unwrap();
+        document.connections[0]
+            .as_object_mut()
+            .unwrap()
+            .remove("group");
+        document.connections[0]
+            .as_object_mut()
+            .unwrap()
+            .remove("tags");
+        save_editor_config(&path, document.connections, &document.hash, &[]).unwrap();
+        let configs = load_config(&path).unwrap();
+        assert_eq!(configs[0].group, None);
+        assert!(configs[0].tags.is_empty());
+    }
+
+    #[test]
+    fn classification_is_optional_and_normalized() {
+        let (_dir, path) = write_config(
+            r#"[
+          {"name":"old","host":"host","username":"root","password":"p"},
+          {"name":"new","host":"host","username":"root","password":"p",
+           "group":"  生产环境  ","tags":[" 应用 ","应用",""," 上海 ","app","App"]}
+        ]"#,
+        );
+        let configs = load_config(&path).unwrap();
+        assert_eq!(configs[0].group, None);
+        assert!(configs[0].tags.is_empty());
+        assert_eq!(configs[1].group.as_deref(), Some("生产环境"));
+        assert_eq!(configs[1].tags, ["应用", "上海", "app", "App"]);
+        for metadata in [r#""group":[]"#, r#""tags":"应用""#, r#""tags":[1]"#] {
+            let raw = format!(
+                r#"[{{"name":"a","host":"host","username":"root","password":"p",{metadata}}}]"#
+            );
+            let (_dir, path) = write_config(&raw);
+            assert!(load_config(&path).is_err());
+        }
+    }
     #[test]
     fn load_config_validates_duplicate_names() {
         let (_dir, path) = write_config(

@@ -79,6 +79,17 @@
     .search input::placeholder { color: #718496; }
     .search input:focus { border-color: var(--accent); outline: 0; box-shadow: 0 0 0 2px var(--accent-soft); }
     .connection-list { overflow-y: auto; padding: 7px; scrollbar-color: #4d5c6b transparent; scrollbar-width: thin; }
+    .mode-switch.list-mode { margin-top: 10px; grid-template-columns: repeat(3, 1fr); }
+    .connection-section { min-width: 0; }
+    .connection-section summary { padding: 10px 8px; color: var(--muted-strong); font-size: 11px; cursor: pointer; overflow-wrap: anywhere; }
+    .connection-section summary strong { margin-left: 6px; color: var(--muted); font: 10px var(--font-mono); }
+    .connection-section summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .tag-entry { display: flex; gap: 6px; }
+    .tag-entry input { min-width: 0; }
+    .tag-entry .btn { flex: 0 0 auto; white-space: nowrap; }
+    .tag-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .tag-chip { max-width: 100%; padding: 4px 8px; border: 1px solid var(--line-dark); border-radius: 5px; background: var(--accent-soft); color: var(--ink); font-size: 11px; overflow-wrap: anywhere; }
+    .tag-chip:hover { border-color: var(--accent); }
     .connection-empty { padding: 28px 12px; color: var(--muted); font-size: 12px; text-align: center; }
     .connection-item { position: relative; display: grid; width: 100%; grid-template-columns: 10px minmax(0, 1fr) 18px; align-items: center; gap: 11px; min-height: 58px; margin: 0 0 3px; padding: 8px 10px; overflow: hidden; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--muted-strong); text-align: left; transition: background-color 150ms ease, color 150ms ease; }
     .connection-item::before { position: absolute; top: 9px; bottom: 9px; left: 0; width: 2px; border-radius: 2px; background: transparent; content: ""; }
@@ -229,6 +240,8 @@
       .eyebrow { margin: 0; }
       .connection-list { display: flex; gap: 5px; overflow-x: auto; padding: 8px 10px; }
       .connection-item { flex: 0 0 205px; margin: 0; } .connections-foot { display: none; }
+      .mode-switch.list-mode { grid-column: 1 / -1; margin-top: 0; }
+      .connection-list[data-mode="group"], .connection-list[data-mode="tags"] { display: block; max-height: 280px; overflow-y: auto; }
       .editor { min-height: 760px; }
       .identity { gap: 10px; min-height: 0; padding: 14px 16px 12px; }
       .identity h1 { font-size: 18px; } .identity-primary { align-items: flex-start; flex-direction: column; gap: 3px; }
@@ -296,7 +309,8 @@
       <aside class="connections" aria-label="SSH 连接">
         <div class="connections-head">
           <div class="eyebrow"><span>SSH 连接</span><strong id="connection-count">3 个连接</strong></div>
-          <div class="search"><svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg><input id="search" type="search" aria-label="搜索连接" placeholder="搜索名称、主机或用户"></div>
+          <div class="search"><svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg><input id="search" type="search" aria-label="搜索连接" placeholder="搜索连接、分组或标签"></div>
+          <div class="mode-switch list-mode" role="group" aria-label="连接展示方式"><button type="button" class="active" data-list-mode="all" aria-pressed="true">全部</button><button type="button" data-list-mode="group" aria-pressed="false">按分组</button><button type="button" data-list-mode="tags" aria-pressed="false">按标签</button></div>
         </div>
         <nav class="connection-list" id="connection-list" aria-label="连接列表"></nav>
         <div class="connections-foot"><button class="btn" id="add" type="button"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>新建连接</button></div>
@@ -339,6 +353,13 @@
               </div>
             </section>
 
+            <section class="form-section">
+              <div class="section-title"><h2>分组与标签</h2></div>
+              <div class="fields">
+                <div class="field span-6"><label for="f-group">分组</label><input id="f-group" data-field="group" list="group-options" autocomplete="off" placeholder="未分组"><datalist id="group-options"></datalist><div class="error" data-error="group" role="alert"></div></div>
+                <div class="field span-6"><label for="tag-input">标签</label><div class="tag-entry"><input id="tag-input" list="tag-options" autocomplete="off" placeholder="输入或选择标签"><button class="btn" id="add-tag" type="button">添加</button></div><datalist id="tag-options"></datalist><div class="tag-chips" id="tag-chips"></div><div class="error" data-error="tags" role="alert"></div></div>
+              </div>
+            </section>
             <section class="form-section">
               <div class="section-title"><h2>链路</h2></div>
               <div class="fields">
@@ -438,6 +459,8 @@
     let connections = structuredClone(seed);
     let selected = 0;
     let dirty = false;
+    let listMode = "all";
+    const collapsedSections = new Map();
     let savedConnections = structuredClone(seed);
     let savedByItem = new WeakMap();
     let configHash = "";
@@ -463,6 +486,8 @@
     // EDITOR_VALIDATION_START：仅包含可在 Node VM 中执行的前端即时校验纯逻辑。
     const FIELD_SCHEMA = [
       { key: "name", type: "string", required: "连接名称不能为空", unique: "连接名称必须唯一" },
+      { key: "group", type: "string" },
+      { key: "tags", type: "array" },
       { key: "host", type: "string", required: "主机不能为空" },
       { key: "port", type: "number", defaultValue: 22, required: "端口不能为空", validate: value => Number.isInteger(value) && value >= 1 && value <= 65535 ? "" : "端口范围为 1 到 65535" },
       { key: "username", type: "string", required: "用户名不能为空" },
@@ -483,7 +508,8 @@
     ];
     const scalarFields = FIELD_SCHEMA.filter(field => field.type === "string" || field.type === "number");
     const booleanFields = FIELD_SCHEMA.filter(field => field.type === "boolean");
-    const arrayFields = FIELD_SCHEMA.filter(field => field.type === "array");
+    // 多行文本框只承载规则与路径；标签始终以数组保存，保留标签内部的换行。
+    const arrayFields = FIELD_SCHEMA.filter(field => field.type === "array" && field.key !== "tags");
     const knownFields = new Set(FIELD_SCHEMA.map(field => field.key));
 
     function matchesFieldType(value, type) {
@@ -590,9 +616,8 @@
       $("#path-icon").innerHTML = iconUse("i-file-json");
     }
 
-    function updateListItem(button, item, index) {
+    function updateListItem(button, item, index, unsaved = connectionChanged(item)) {
       const view = connectionView(item);
-      const unsaved = connectionChanged(item);
       button.connection = item;
       button.dataset.index = index;
       button.classList.toggle("active", index === selected);
@@ -607,45 +632,132 @@
       authIcon.setAttribute("aria-label", view.authLabel);
     }
 
+    // EDITOR_CLASSIFICATION_START：分类使用原始索引，标签视图的多次展示共享同一连接。
+    function connectionTags(item) {
+      return [...new Set((item.tags || []).map(tag => tag.trim()).filter(Boolean))];
+    }
+
+    function connectionSections(items, mode, query = "") {
+      const search = query.trim().toLowerCase();
+      const sections = new Map();
+      items.forEach((item, index) => {
+        const tags = connectionTags(item);
+        const group = item.group?.trim() || null;
+        if (![item.name, item.host, item.username, group, ...tags].join(" ").toLowerCase().includes(search)) return;
+        const keys = mode === "tags" ? (tags.length ? tags : [null]) : mode === "group" ? [group] : [null];
+        keys.forEach(key => {
+          if (!sections.has(key)) sections.set(key, []);
+          sections.get(key).push({ item, index });
+        });
+      });
+      return [...sections].map(([key, entries]) => ({ key, entries }));
+    }
+    // EDITOR_CLASSIFICATION_END
+
     function renderList() {
-      const query = $("#search").value.trim().toLowerCase();
-      const visible = connections.map((item, index) => ({ item, index })).filter(({ item }) => `${item.name || ""} ${item.host || ""} ${item.username || ""}`.toLowerCase().includes(query));
-      const oldButtons = [...list.querySelectorAll(".connection-item")];
-      const byItem = new Map(oldButtons.map(button => [button.connection, button]));
-      const byName = new Map(oldButtons.map(button => [button.connection.name, button]));
-      const retained = new Set();
+      const sections = connectionSections(connections, listMode, $("#search").value);
+      const focused = document.activeElement;
+      const focusWasInList = list.contains(focused);
       const scrollTop = list.scrollTop;
       const scrollLeft = list.scrollLeft;
-      const focusWasInList = list.contains(document.activeElement);
-      if (!visible.length) {
-        if (!list.querySelector(".connection-empty")) list.innerHTML = `<div class="connection-empty">未找到连接</div>`;
-      } else {
-        visible.forEach(({ item, index }, order) => {
-          const named = byName.get(item.name);
-          let button = byItem.get(item);
-          if (!button && named && !connections.includes(named.connection) && !retained.has(named)) button = named;
+      const oldButtons = new Map();
+      list.querySelectorAll(".connection-item").forEach(button => {
+        if (!oldButtons.has(button.connection)) oldButtons.set(button.connection, new Map());
+        oldButtons.get(button.connection).set(button.dataset.section, button);
+      });
+      // 空分类使用 null，避免与用户输入的“未分组”或“无标签”名称合并。
+      if (list.dataset.searching !== "true") {
+        list.querySelectorAll("details").forEach(section => collapsedSections.set(section.dataset.key, !section.open));
+      }
+      // 同一连接在多个标签下展示时，本次渲染只比较一次快照。
+      const changedByItem = new Map();
+      const fragment = document.createDocumentFragment();
+      sections.forEach(({ key, entries }) => {
+        const sectionKey = JSON.stringify([listMode, key]);
+        let container = fragment;
+        if (listMode !== "all") {
+          const section = document.createElement("details");
+          section.className = "connection-section";
+          section.dataset.key = sectionKey;
+          section.open = $("#search").value.trim() ? true : !collapsedSections.get(sectionKey);
+          const summary = document.createElement("summary");
+          summary.append(document.createTextNode(key ?? (listMode === "tags" ? "无标签" : "未分组")));
+          const count = document.createElement("strong");
+          count.textContent = String(entries.length);
+          summary.append(count);
+          section.append(summary);
+          fragment.append(section);
+          container = section;
+        }
+        entries.forEach(({ item, index }) => {
+          let button = oldButtons.get(item)?.get(sectionKey);
           if (!button) {
             button = document.createElement("button");
             button.type = "button";
             button.className = "connection-item";
-            button.innerHTML = `<span class="connection-index">${iconUse("i-server")}</span><span class="connection-copy"><strong></strong><span></span></span><span class="auth-icon">${iconUse("i-lock-keyhole")}</span>`;
+            button.innerHTML = '<span class="connection-index">' + iconUse("i-server") + '</span><span class="connection-copy"><strong></strong><span></span></span><span class="auth-icon">' + iconUse("i-lock-keyhole") + '</span>';
           }
-          updateListItem(button, item, index);
-          retained.add(button);
-          if (list.children[order] !== button) list.insertBefore(button, list.children[order] || null);
+          button.dataset.section = sectionKey;
+          if (!changedByItem.has(item)) changedByItem.set(item, connectionChanged(item));
+          updateListItem(button, item, index, changedByItem.get(item));
+          container.append(button);
         });
-        [...list.children].forEach(child => { if (!retained.has(child)) child.remove(); });
+      });
+      if (!sections.length) {
+        const empty = document.createElement("div");
+        empty.className = "connection-empty";
+        empty.textContent = "未找到连接";
+        fragment.append(empty);
       }
+      list.replaceChildren(fragment);
+      list.dataset.mode = listMode;
+      list.dataset.searching = String(Boolean($("#search").value.trim()));
       list.scrollTop = scrollTop;
       list.scrollLeft = scrollLeft;
-      if (focusWasInList && !list.contains(document.activeElement)) list.querySelector(".connection-item.active")?.focus({ preventScroll: true });
-      $("#connection-count").textContent = `${connections.length} 个连接`;
-      $("#status-count").textContent = `${connections.length} 个连接`;
+      if (focusWasInList) {
+        const target = list.contains(focused) ? focused : list.querySelector(".connection-item.active");
+        target?.focus({ preventScroll: true });
+      }
+      $("#connection-count").textContent = connections.length + " 个连接";
+      $("#status-count").textContent = connections.length + " 个连接";
     }
 
     function updateCurrentListItem() {
-      const button = list.querySelector(`[data-index="${selected}"]`);
-      if (button && current()) updateListItem(button, current(), selected);
+      const item = current();
+      if (!item) return;
+      const unsaved = connectionChanged(item);
+      list.querySelectorAll(`[data-index="${selected}"]`).forEach(button => updateListItem(button, item, selected, unsaved));
+    }
+
+    function renderClassificationFields() {
+      const groups = [...new Set(connections.map(item => item.group?.trim()).filter(Boolean))];
+      const tags = [...new Set(connections.flatMap(connectionTags))];
+      $("#group-options").replaceChildren(...groups.map(value => new Option(value, value)));
+      $("#tag-options").replaceChildren(...tags.map(value => new Option(value, value)));
+      $("#tag-chips").replaceChildren(...connectionTags(current()).map(tag => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "tag-chip";
+        button.textContent = tag + " ×";
+        button.setAttribute("aria-label", "移除标签 " + tag);
+        button.addEventListener("click", () => {
+          current().tags = connectionTags(current()).filter(value => value !== tag);
+          updateFromForm();
+          renderClassificationFields();
+          $("#tag-input").focus();
+        });
+        return button;
+      }));
+    }
+
+    function addTag() {
+      const value = $("#tag-input").value.trim();
+      if (!value) return;
+      current().tags = [...new Set([...connectionTags(current()), value])];
+      $("#tag-input").value = "";
+      updateFromForm();
+      renderClassificationFields();
+      $("#tag-input").focus();
     }
 
     function renderJumpHosts() {
@@ -758,6 +870,8 @@
         if (field) field.checked = Boolean(item[key]);
       });
       arrayFields.forEach(({ key }) => { $(`#f-${key}`).value = (item[key] || []).join("\n"); });
+      $("#tag-input").value = "";
+      renderClassificationFields();
       renderJumpHosts();
       renderSecret();
       setAuthMode(authMode(item), false);
@@ -828,6 +942,7 @@
 
     function updateFromForm(event) {
       const item = current();
+      if (event?.target.id === "tag-input") return;
       if (event?.target.matches("[data-secret]")) {
         const state = secretState(item);
         clearTimeout(state.timer);
@@ -852,6 +967,8 @@
       scalarFields.forEach(({ key, type }) => {
         const field = $(`#f-${key}`);
         if (!field) return;
+        // 单行输入框会移除换行；未编辑分组时保留配置原值，避免其他字段更新造成数据损失。
+        if (key === "group" && event?.target !== field) return;
         const value = type === "number" ? Number(field.value) : field.value.trim();
         if (value === "" || (type === "number" && !Number.isFinite(value))) delete item[key];
         else item[key] = value;
@@ -869,7 +986,7 @@
         referenceName = item.name;
       }
       markDirty();
-      if ($("#search").value.trim()) renderList(); else updateCurrentListItem();
+      renderList();
       renderIdentity();
       renderJson();
       validate();
@@ -895,7 +1012,7 @@
     function ordered(item) {
       const result = {};
       FIELD_SCHEMA.forEach(({ key }) => {
-        const value = item[key];
+        const value = key === "group" ? item.group?.trim() : key === "tags" ? connectionTags(item) : item[key];
         if (value !== undefined && value !== "" && !(Array.isArray(value) && value.length === 0)) result[key] = value;
       });
       return result;
@@ -949,10 +1066,12 @@
       });
       $("#save").classList.toggle("dirty", dirty);
       $("#discard").disabled = !dirty || $("#save").disabled;
+      const changedByItem = new Map();
       list.querySelectorAll(".connection-item").forEach(button => {
         const item = connections[Number(button.dataset.index)];
         if (!item) return;
-        const unsaved = connectionChanged(item);
+        if (!changedByItem.has(item)) changedByItem.set(item, connectionChanged(item));
+        const unsaved = changedByItem.get(item);
         button.classList.toggle("unsaved", unsaved);
         button.setAttribute("aria-label", `第 ${Number(button.dataset.index) + 1} 个连接：${connectionView(item).displayName}${unsaved ? "，未保存" : ""}`);
       });
@@ -970,17 +1089,9 @@
       if (index === selected) return;
       setTestStatus();
       if (!commitPendingJsonSource()) return;
-      const previous = list.querySelector(".connection-item.active");
-      const next = list.querySelector(`[data-index="${index}"]`);
-      if (previous) {
-        previous.classList.remove("active");
-        previous.setAttribute("aria-current", "false");
-      }
-      if (next) {
-        next.classList.add("active");
-        next.setAttribute("aria-current", "true");
-      }
+      // 标签视图可能有多个相同连接入口，选中状态统一由列表渲染更新。
       selected = index;
+      renderList();
       renderForm();
       renderJson();
       if (jsonSource.classList.contains("active")) jsonSource.value = jsonText();
@@ -1417,6 +1528,19 @@
       if (item) selectConnection(Number(item.dataset.index));
     });
     $("#search").addEventListener("input", renderList);
+    $("#add-tag").addEventListener("click", addTag);
+    $("#tag-input").addEventListener("keydown", event => {
+      if (event.key === "Enter" && !event.isComposing) { event.preventDefault(); addTag(); }
+    });
+    $$('[data-list-mode]').forEach(button => button.addEventListener("click", () => {
+      listMode = button.dataset.listMode;
+      $$('[data-list-mode]').forEach(item => {
+        const active = item === button;
+        item.classList.toggle("active", active);
+        item.setAttribute("aria-pressed", String(active));
+      });
+      renderList();
+    }));
     form.addEventListener("input", updateFromForm);
     $("#f-password").addEventListener("focus", beginPasswordInput);
     form.addEventListener("click", event => {

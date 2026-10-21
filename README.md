@@ -12,7 +12,7 @@
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white" alt="Node.js >=18"></a>
   <a href="https://www.npmjs.com/"><img src="https://img.shields.io/badge/npm-%3E%3D8-CB3837?logo=npm&logoColor=white" alt="npm >=8"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli"><img src="https://img.shields.io/badge/sys-win%2Fmac%2Flinux-0078D6" alt="sys win/mac/linux"></a>
-  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.6.5-blue" alt="release v0.6.5"></a>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.7.0-blue" alt="release v0.7.0"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
 </p>
 
@@ -102,9 +102,15 @@ mkdir -p ~/.agent-ssh-cli
 AGENT_SSH_CONFIG=/path/to/config.json
 ```
 
+`agentsshcli list` 的 JSON 输出包含 `group` 和 `tags`，未设置时分别为 `null` 和 `[]`。使用 `agentsshcli list --group 生产环境` 或 `agentsshcli list --tag 应用` 精确筛选；同时传入两者时取交集，匹配区分大小写，无匹配时输出 `[]`。
+
+配置编辑器左侧可切换「全部 / 按分组 / 按标签」，分类可折叠，搜索支持名称、主机、用户名、分组和标签。在连接表单中选择或输入分组，输入标签后按 Enter 或点击「添加」，点击标签上的 × 移除；多标签连接会显示在各个标签分类下，编辑的是同一条连接。
+
 配置文件是数组，每一项是一台服务器：
 
 - `name`: 连接名，必须唯一
+- `group`: 可选的单层分组名，每个连接最多一个；省略或空白时显示为「未分组」
+- `tags`: 可选的标签字符串数组，例如 `["应用", "上海"]`；去除首尾空格、空项和重复项，保留大小写
 - `host`: SSH 主机地址
 - `username`: SSH 用户名
 - `password` / `passwordRef` / `privateKey`: 认证方式，密码、密码引用、私钥三类认证只能保留一种

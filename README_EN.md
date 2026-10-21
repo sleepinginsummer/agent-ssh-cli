@@ -12,7 +12,7 @@ Remote exec · File upload · File download · Connection config · Command whit
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white" alt="Node.js >=18"></a>
   <a href="https://www.npmjs.com/"><img src="https://img.shields.io/badge/npm-%3E%3D8-CB3837?logo=npm&logoColor=white" alt="npm >=8"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli"><img src="https://img.shields.io/badge/sys-win%2Fmac%2Flinux-0078D6" alt="sys win/mac/linux"></a>
-  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.6.5-blue" alt="release v0.6.5"></a>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.7.0-blue" alt="release v0.7.0"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
 </p>
 
@@ -87,9 +87,12 @@ You can change the configuration location with the following environment variabl
 AGENT_SSH_CONFIG=/path/to/config.json
 ```
 
+Use `agentsshcli list --group production` or `agentsshcli list --tag app` to filter connections. Combine both filters for their intersection; matching is case-sensitive. List output includes `group` and `tags`, with `null` and `[]` for uncategorized connections. The editor switches between all connections, groups, and tags, supports collapsible categories and classification search, and lets you select or enter a group and add/remove tags.
 The configuration file is an array, and each item represents one server:
 
 - `name`: Connection name, must be unique
+- `group`: Optional single-level connection group
+- `tags`: Optional string array; trims whitespace, removes empty entries and duplicates, and preserves case
 - `host`: SSH host address
 - `username`: SSH username
 - `password` / `passwordRef` / `privateKey`: Authentication method; keep exactly one authentication type among password, password reference, and private key

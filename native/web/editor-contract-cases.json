@@ -1,4 +1,78 @@
 [
+{
+  "name": "分组与多标签可选字段",
+  "valid": true,
+  "connections": [
+    {
+      "name": "server",
+      "host": "127.0.0.1",
+      "username": "root",
+      "privateKey": "~/.ssh/id_ed25519",
+      "group": " 生产环境 ",
+      "tags": [
+        "应用",
+        " 应用 ",
+        "",
+        "上海"
+      ]
+    }
+  ]
+},
+{
+  "name": "分类字段为空时兼容旧配置",
+  "valid": true,
+  "connections": [
+    {
+      "name": "server",
+      "host": "127.0.0.1",
+      "username": "root",
+      "privateKey": "~/.ssh/id_ed25519",
+      "group": null,
+      "tags": null
+    }
+  ]
+},
+{
+  "name": "分组必须为字符串",
+  "valid": false,
+  "connections": [
+    {
+      "name": "server",
+      "host": "127.0.0.1",
+      "username": "root",
+      "privateKey": "~/.ssh/id_ed25519",
+      "group": []
+    }
+  ]
+},
+{
+  "name": "标签必须为数组",
+  "valid": false,
+  "connections": [
+    {
+      "name": "server",
+      "host": "127.0.0.1",
+      "username": "root",
+      "privateKey": "~/.ssh/id_ed25519",
+      "tags": "应用"
+    }
+  ]
+},
+{
+  "name": "标签元素必须为字符串",
+  "valid": false,
+  "connections": [
+    {
+      "name": "server",
+      "host": "127.0.0.1",
+      "username": "root",
+      "privateKey": "~/.ssh/id_ed25519",
+      "tags": [
+        1
+      ]
+    }
+  ]
+},
   {
     "name": "省略端口时使用默认值",
     "valid": true,

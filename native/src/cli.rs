@@ -36,7 +36,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const HELP_AGENTSSHCLI: &str = r#"
 用法:
-  agentsshcli list [--config <path>] [--json]
+  agentsshcli list [--config <path>] [--group <group>] [--tag <tag>] [--json]
   agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] [--pty|--no-pty] [--sudo|--su] <connectionName> <command>
   agentsshcli exec [--config <path>] [--no-cache] [--cache-ttl <ms>] [--pty|--no-pty] [--sudo|--su] --connection <name> (--command <command>|--command-file <path>) [--directory <dir>] [--timeout <ms>]
   agentsshcli upload [--config <path>] [--no-cache] [--cache-ttl <ms>] <connectionName> <localPath> <remotePath>
@@ -58,12 +58,13 @@ const HELP_AGENTSSHCLI: &str = r#"
 
 const HELP_LIST: &str = r#"
 用法:
-  agentsshcli list [--config <path>] [--json]
+  agentsshcli list [--config <path>] [--group <group>] [--tag <tag>] [--json]
   agentsshcli help list
   agentsshcli --version
 
 说明:
   列出当前配置文件中的 SSH 连接。
+  --group / --tag: 按分组或标签精确筛选（区分大小写）；同时传入时取交集。
 "#;
 
 const HELP_TRUST_HOST: &str = r#"
@@ -567,6 +568,10 @@ fn parse_transfer_args(argv: Vec<String>, mode: TransferMode) -> AppResult<Trans
 }
 
 fn run_list(argv: Vec<String>) -> AppResult<()> {
+    // list 没有位置参数，先取出分类选项，避免其值截断后续全局参数解析。
+    let mut argv = argv;
+    let group = take_option(&mut argv, &["--group"])?;
+    let tag = take_option(&mut argv, &["--tag"])?;
     let global = parse_global_args(argv)?;
     if global.help {
         return print_help("list");
@@ -577,6 +582,11 @@ fn run_list(argv: Vec<String>) -> AppResult<()> {
     let mut args = global.args.clone();
     // 兼容 list --json 用法：当前 list 默认输出即为 JSON。
     let _ = take_bool_flag(&mut args, "--json")?;
+    for (flag, value) in [("--group", &group), ("--tag", &tag)] {
+        if value.as_ref().is_some_and(|value| value.trim().is_empty()) {
+            return Err(AppError::new(format!("{} 不能为空", flag)));
+        }
+    }
     if !args.is_empty() {
         return Err(AppError::new(format!(
             "agentsshcli list 不接受位置参数: {}",
@@ -586,9 +596,20 @@ fn run_list(argv: Vec<String>) -> AppResult<()> {
     let configs = load_config(&global.config_path)?;
     let output: Vec<serde_json::Value> = configs
         .iter()
+        .filter(|item| {
+            group
+                .as_ref()
+                .is_none_or(|value| item.group.as_deref() == Some(value.trim()))
+        })
+        .filter(|item| {
+            tag.as_ref()
+                .is_none_or(|value| item.tags.iter().any(|tag| tag == value.trim()))
+        })
         .map(|item| {
             let mut entry = serde_json::Map::new();
             entry.insert("name".to_string(), serde_json::json!(item.name));
+            entry.insert("group".to_string(), serde_json::json!(item.group));
+            entry.insert("tags".to_string(), serde_json::json!(item.tags));
             entry.insert("host".to_string(), serde_json::json!(item.host));
             entry.insert("port".to_string(), serde_json::json!(item.port));
             entry.insert("username".to_string(), serde_json::json!(item.username));
@@ -899,6 +920,42 @@ fn resolve_execute_command(_configs: &[Connection], parsed: &ExecuteArgs) -> App
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn list_accepts_filter_values_before_global_and_boolean_flags() {
+        let (_dir, path) = crate::test_support::write_config(
+            r#"[{"name":"server","host":"host","username":"root","privateKey":"key","group":"生产环境","tags":["应用"]}]"#,
+        );
+        for flags in [
+            vec![
+                "--group",
+                "生产环境",
+                "--config",
+                path.to_str().unwrap(),
+                "--tag",
+                "应用",
+                "--json",
+            ],
+            vec![
+                "--tag",
+                "应用",
+                "--json",
+                "--config",
+                path.to_str().unwrap(),
+                "--group",
+                "生产环境",
+            ],
+        ] {
+            assert!(run_list(flags.into_iter().map(String::from).collect()).is_ok());
+        }
+        for flags in [
+            vec!["--group"],
+            vec!["--tag", ""],
+            vec!["--tag", "a", "--tag", "b"],
+        ] {
+            assert!(run_list(flags.into_iter().map(String::from).collect()).is_err());
+        }
+    }
 
     #[test]
     fn trust_host_requires_fingerprint_before_connection() {

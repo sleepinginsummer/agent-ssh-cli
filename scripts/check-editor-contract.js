@@ -48,7 +48,15 @@ const jsonCompareSource = extractSection(
   "// EDITOR_JSON_COMPARE_END",
   "JSON 语义比较器"
 );
+const classificationSource = extractSection(
+  "// EDITOR_CLASSIFICATION_START",
+  "// EDITOR_CLASSIFICATION_END",
+  "连接分类器"
+);
 const context = vm.createContext({});
+vm.runInContext(classificationSource, context);
+// 同时解析完整脚本，防止纯逻辑契约通过而页面存在语法错误。
+new vm.Script(html.match(/<script>([\s\S]*?)<\/script>/)[1]);
 vm.runInContext(
   `${validationSource}; this.validateConnections = validateConnections;`,
   context
@@ -70,6 +78,84 @@ for (const testCase of cases) {
     );
   }
 }
+// 分类不能修改原始数组；多标签共享索引，空分类不能与同名分类合并。
+context.classifiedItems = [
+  { name: "a", host: "server", group: " 生产 ", tags: [" 应用 ", "应用", "上海", ""] },
+  { name: "b", host: "other", group: "未分组", tags: ["无标签"] },
+  { name: "c", host: "old" }
+];
+const sections = (mode, query = "") => JSON.parse(vm.runInContext(
+  "JSON.stringify(connectionSections(classifiedItems, " + JSON.stringify(mode) + ", " + JSON.stringify(query) + ").map(s => [s.key, s.entries.map(e => e.index)]))", context
+));
+assert.deepEqual(sections("all"), [[null, [0, 1, 2]]]);
+assert.deepEqual(sections("group"), [["生产", [0]], ["未分组", [1]], [null, [2]]]);
+assert.deepEqual(sections("tags"), [["应用", [0]], ["上海", [0]], ["无标签", [1]], [null, [2]]]);
+assert.deepEqual(sections("all", "上海"), [[null, [0]]]);
+assert.deepEqual(sections("group", "生产"), [["生产", [0]]]);
+assert.deepEqual(sections("tags", "missing"), []);
+assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(ordered(classifiedItems[0]))", context)), {
+  name: "a", group: "生产", tags: ["应用", "上海"], host: "server"
+});
+// 回归：实际表单加载、普通字段更新和标签增删都不能把标签内部换行当作分隔符。
+const formFields = new Map();
+function formElement() {
+  return {
+    value: "", checked: false, children: [], listeners: {},
+    matches: () => false,
+    focus() {},
+    setAttribute() {},
+    addEventListener(type, handler) { this.listeners[type] = handler; },
+    replaceChildren(...children) { this.children = children; }
+  };
+}
+const formField = selector => {
+  if (!formFields.has(selector)) formFields.set(selector, formElement());
+  return formFields.get(selector);
+};
+const formContext = vm.createContext({
+  $: formField,
+  document: { createElement: formElement },
+  Option: function Option(text, value) { return { text, value }; },
+  connections: [{ name: "server", host: "old-host", port: 22, username: "root", privateKey: "key", group: "华东\n生产", tags: ["华东\n生产"] }],
+  referenceName: "server", selected: 0,
+  renderJumpHosts() {}, renderSecret() {}, setAuthMode() {}, renderIdentity() {}, validate() {},
+  authMode: () => "key", markDirty() {}, renderList() {}, renderJson() {}
+});
+formContext.current = () => formContext.connections[0];
+vm.runInContext([
+  validationSource, classificationSource, jsonCompareSource,
+  extractSection("    function renderForm()", "    function renderConnectionRoute()", "表单加载"),
+  extractSection("    function renderClassificationFields()", "    function renderJumpHosts()", "标签编辑"),
+  extractSection("    function updateFromForm(", "    function validate()", "表单更新")
+].join("\n"), formContext);
+vm.runInContext("renderForm()", formContext);
+const originalTags = formContext.current().tags;
+// 模拟真实单行 input 的换行清理；浏览器 DOM 行为另行验证。
+formField("#f-group").value = "华东生产";
+formField("#f-host").value = "new-host";
+vm.runInContext('updateFromForm({ target: $("#f-host") })', formContext);
+assert.equal(formContext.current().host, "new-host");
+assert.strictEqual(formContext.current().tags, originalTags, "普通字段更新必须保留标签数组");
+assert.equal(formContext.current().group, "华东\n生产", "修改主机不能覆盖未编辑的分组");
+const roundtrip = JSON.parse(vm.runInContext("JSON.stringify(connections.map(ordered))", formContext));
+assert.deepEqual(roundtrip[0].tags, ["华东\n生产"], "序列化后含换行的标签必须仍是一项");
+assert.equal(roundtrip[0].group, "华东\n生产", "含换行分组序列化后必须保持不变");
+formContext.connections = roundtrip;
+vm.runInContext("renderForm()", formContext);
+formField("#tag-input").value = "新标签";
+vm.runInContext("addTag()", formContext);
+assert.deepEqual(Array.from(formContext.current().tags), ["华东\n生产", "新标签"]);
+formField("#tag-chips").children.find(button => button.textContent === "新标签 ×").listeners.click();
+assert.deepEqual(Array.from(formContext.current().tags), ["华东\n生产"], "移除其他标签不能拆分原标签");
+formField("#tag-chips").children[0].listeners.click();
+assert.deepEqual(Array.from(formContext.current().tags), [], "含换行标签必须能作为一项移除");
+assert.equal(formContext.current().group, "华东\n生产", "标签操作也必须保留原分组");
+formField("#f-group").value = "新分组";
+vm.runInContext('updateFromForm({ target: $("#f-group") })', formContext);
+assert.equal(formContext.current().group, "新分组", "显式编辑分组仍须生效");
+formField("#f-group").value = "";
+vm.runInContext('updateFromForm({ target: $("#f-group") })', formContext);
+assert.ok(!Object.hasOwn(formContext.current(), "group"), "清空分组仍须生效");
 context.leftConnections = [{ name: "same", host: "host", port: 22, username: "root" }];
 context.rightConnections = [{ username: "root", port: 22, host: "host", name: "same" }];
 if (!vm.runInContext("connectionsSemanticallyEqual(leftConnections, rightConnections)", context)) {

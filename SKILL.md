@@ -154,6 +154,7 @@ agentsshcli stop-editor [--config <path>]
 配置文件完整字段（每项是 `name` 唯一的一台服务器）：
 
 - `name`: 连接名，必须唯一
+- `group` / `tags`: 可选单层分组与标签数组，编辑器支持按分组或标签展示；标签去空白、去重
 - `host` / `port` / `username`: SSH 主机、端口（默认 22）、用户名
 - `password` / `passwordRef` / `privateKey`: 认证方式，三者只能保留一种；`passphrase` 仅配合 `privateKey` 使用
 - `jumpHost`: 跳板机连接名，填写配置文件中另一台机器的 `name`；连接时先建立到跳板机的 SSH，再通过直连通道到达目标机
@@ -234,16 +235,18 @@ agentsshcli init-config
 ```bash
 agentsshcli list
 agentsshcli list --json
+agentsshcli list --group 生产环境 --tag 应用
 ```
 
 参数：
 
 - `--json`: 输出 JSON 格式。当前默认输出也是 JSON。
 - `--config <path>`: 指定配置文件
+- `--group <group>` / `--tag <tag>`: 区分大小写的精确筛选，同时传入时取交集
 
 返回值：
 
-- 成功时 stdout 输出服务器数组，只包含 `name`、`host`、`port`、`username`
+- 成功时 stdout 输出服务器数组，包含 `name`、`host`、`port`、`username`、`group`、`tags`；配置跳板机时还有 `jumpHost`；无匹配时输出 `[]`
 - 不输出密码、私钥、passphrase、黑白名单等敏感或控制字段
 - 退出码为 `0`
 
@@ -253,6 +256,8 @@ agentsshcli list --json
 [
   {
     "name": "服务器",
+    "group": null,
+    "tags": [],
     "host": "192.0.2.10",
     "port": 22,
     "username": "root"
