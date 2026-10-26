@@ -799,13 +799,17 @@
       const field = $("#f-password");
       const reveal = $("[data-reveal=\"password\"]");
       const meta = $("[data-secret-meta=\"password\"]");
+      // 草稿是本机刚输入的明文，可直接切换显示；已保存密码只以只读明文短暂展示。
+      const plain = state.visible && (state.mode === "draft" || state.mode === "revealed");
+      const label = plain ? "隐藏密码" : state.mode === "draft" ? "显示密码" : "查看已保存密码";
       field.value = state.mode === "revealed" ? state.revealedValue : state.draftValue;
       field.readOnly = state.mode === "revealed";
       field.placeholder = item.passwordRef ? "输入新密码以替换" : "输入密码";
-      field.type = state.mode === "revealed" && state.visible ? "text" : "password";
-      reveal.disabled = !item.passwordRef || state.mode === "draft";
-      reveal.querySelector("use").setAttribute("href", state.visible ? "#i-eye-off" : "#i-eye");
-      reveal.setAttribute("aria-label", state.visible ? "隐藏密码" : "查看已保存密码");
+      field.type = plain ? "text" : "password";
+      reveal.disabled = state.mode === "empty" && !item.passwordRef;
+      reveal.title = label;
+      reveal.setAttribute("aria-label", label);
+      reveal.querySelector("use").setAttribute("href", plain ? "#i-eye-off" : "#i-eye");
       meta.textContent = state.mode === "draft" ? "新密码待保存" : state.mode === "revealed" ? "只读明文将在短时间后清除" : item.passwordRef ? "已加密" : "未保存密码";
       meta.classList.toggle("revealed", state.mode === "revealed");
     }
@@ -825,6 +829,12 @@
     async function revealPassword() {
       const item = current();
       const state = secretState(item);
+      // 未保存的密码草稿只在本机切换显隐，不请求服务端解密。
+      if (state.mode === "draft") {
+        state.visible = !state.visible;
+        renderSecret();
+        return;
+      }
       if (state.mode === "revealed" && state.revealedValue) {
         state.visible = !state.visible;
         renderSecret();
@@ -958,7 +968,8 @@
           $("#f-passwordRef").value = "";
         }
         state.mode = state.draftValue ? "draft" : "empty";
-        state.visible = false;
+        // 清空草稿后收回明文；继续输入时保留用户选择的显隐状态。
+        if (state.mode === "empty") state.visible = false;
         markDirty();
         renderJson();
         validate();
