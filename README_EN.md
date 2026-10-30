@@ -4,7 +4,7 @@
 
 A CLI-based SSH agent tool that maps ssh-mcp-server capabilities into remote operations callable by agents.
 
-Remote exec · File upload · File download · Connection config · Command whitelist · Command blacklist · Agent Skill integration
+Remote exec · File upload · File download · Connection config · Visual config editor · Command whitelist · Command blacklist · Agent Skill integration
 
 <p>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli"><img src="https://img.shields.io/badge/CLI-agentsshcli-2ea44f" alt="CLI agentsshcli"></a>
@@ -16,7 +16,7 @@ Remote exec · File upload · File download · Connection config · Command whit
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
 </p>
 
-[AI One-Click Installation](#ai-one-click-installation) · [Manual Installation](#manual-installation) · [Configuration](#configuration) · [Uninstall and Cleanup](#uninstall-and-cleanup) · [License](#license) · [Friendly Links](#friendly-links)
+[AI One-Click Installation](#ai-one-click-installation) · [Manual Installation](#manual-installation) · [Configuration](#configuration) · [Visual Config](#visual-configuration-editor) · [Uninstall and Cleanup](#uninstall-and-cleanup) · [License](#license) · [Friendly Links](#friendly-links)
 
 [中文](README.md) | English
 
@@ -37,6 +37,7 @@ This project references the SSH operation design from [classfang/ssh-mcp-server]
 - Upload local files to a remote server with temporary files, resume, and retry
 - Download files from a remote server to local
 - Restrict executable commands through command allowlists and blocklists
+- Edit connection configuration visually in the browser: connection list, groups and tags, route and authentication, command rules, with connection testing and live JSON sync
 
 ## Upload Reliability
 
@@ -176,6 +177,41 @@ agentsshcli exec --no-cache password-server "pwd"
 agentsshcli exec --pty password-server "tty"
 agentsshcli exec password-server --command-file ./script.sh --timeout 60000
 ```
+
+### Visual Configuration Editor
+
+`edit-config` serves a configuration editor on the loopback address for managing connections, groups and tags, routes and authentication, and command rules, with a live preview of `config.json`:
+
+![Visual configuration editor](docs/images/config-editor.png)
+
+Start the editor for the default configuration:
+
+```bash
+agentsshcli edit-config
+```
+
+Use a specific configuration file:
+
+```bash
+agentsshcli edit-config --config /path/to/config.json
+```
+
+Stop the editor serving that configuration file:
+
+```bash
+agentsshcli stop-editor --config /path/to/config.json
+```
+
+Editor behavior:
+
+- The HTTP service only listens on `127.0.0.1` and opens the browser after startup; the URL fragment carries a temporary token, so do not copy it into logs, tickets, or chat.
+- One editor service per configuration file; running `edit-config` again reopens the existing page.
+- The service exits and clears its state file after 10 minutes without authenticated API calls or real page input; old URLs stop working immediately.
+- The backend performs the final validation and concurrent-hash check; saving returns a conflict when the file changed in another process, so reload before editing.
+- The JSON panel switches between global and current-connection scope plus preview and source views; applying source goes through the same validation as the form.
+- "Test connection" uses the current draft (including unsaved passwords) and the jump host, verifies SSH connect and authentication, then disconnects; it never saves the config or runs remote commands, waits at most 15 seconds, and runs one test at a time.
+- Passwords are only persisted as encrypted secrets plus `passwordRef`; duplicating a connection never copies password references or decrypted values.
+- `stop-editor` only stops the local configuration editor; it does not stop the SSH daemon, connection cache, or remote sessions.
 
 Installation is complete.
 

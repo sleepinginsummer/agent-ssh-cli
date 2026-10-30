@@ -13,6 +13,7 @@
   },
   "files": [
     "bin/",
+    "docs/images/",
     "example.config.json",
     "README.md"
   ],

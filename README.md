@@ -4,7 +4,7 @@
 
 基于 CLI 的 SSH 代理工具，按 ssh-mcp-server 的能力映射为 Agent 可调用的远端操作能力。
 
-远程执行 · 文件上传 · 文件下载 · 连接配置 · 命令白名单 · 命令黑名单 · Agent Skill 集成
+远程执行 · 文件上传 · 文件下载 · 连接配置 · 可视化配置 · 命令白名单 · 命令黑名单 · Agent Skill 集成
 
 <p>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli"><img src="https://img.shields.io/badge/CLI-agentsshcli-2ea44f" alt="CLI agentsshcli"></a>
@@ -16,7 +16,7 @@
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
 </p>
 
-[AI 一键安装](#ai-一键安装) · [手动安装](#手动安装) · [配置](#配置) · [卸载和清理](#卸载和清理) · [许可证](#许可证) · [友情链接](#友情链接)
+[AI 一键安装](#ai-一键安装) · [手动安装](#手动安装) · [配置](#配置) · [可视化配置](#可视化配置编辑器) · [卸载和清理](#卸载和清理) · [许可证](#许可证) · [友情链接](#友情链接)
 
 中文 | [English](README_EN.md)
 
@@ -36,6 +36,7 @@
 - 上传本地文件到远端服务器，支持临时文件、断点续传和失败重试
 - 从远端服务器下载文件到本地
 - 通过命令黑白名单限制可执行命令
+- 在浏览器中可视化编辑连接配置：连接列表、分组与标签、链路与认证、命令规则，支持测试连接与 JSON 实时同步
 
 ## 上传稳定性
 
@@ -137,6 +138,10 @@ SSH 建连（含编辑器测试、跳板机、执行命令和文件传输）会�
 为兼容旧配置，CLI 仍支持明文凭据的被动迁移：首次写入 `password` 后，执行 `exec`、`upload` 或 `download` 连接该服务器时，会生成本地 `secret.key`，把密码加密保存到 `secrets.json`，并将配置中的明文字段替换为 `passwordRef`。sudo/su 明文凭据采用相同规则，但只在首次使用对应 flag 时迁移，密文 key 分别为 `agentsshcli:<name>:sudo` 和 `agentsshcli:<name>:su`。提权必须显式设置 `privilegeEnabled: true`。
 
 ### 可视化配置编辑器
+
+`edit-config` 在本机回环地址启动一个配置编辑页面，用于管理连接、分组标签、链路与认证、命令规则，并实时预览对应的 `config.json`：
+
+![可视化配置编辑器](docs/images/config-editor.png)
 
 启动默认配置对应的编辑器：
 
