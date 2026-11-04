@@ -211,6 +211,7 @@ Editor behavior:
 - The JSON panel switches between global and current-connection scope plus preview and source views; applying source goes through the same validation as the form.
 - "Test connection" uses the current draft (including unsaved passwords) and the jump host, verifies SSH connect and authentication, then disconnects; it never saves the config or runs remote commands, waits at most 15 seconds, and runs one test at a time.
 - Passwords are only persisted as encrypted secrets plus `passwordRef`; duplicating a connection never copies password references or decrypted values.
+- The privilege page accepts and reveals separate sudo and su passwords; the first input generates a dedicated reference per connection and saving persists only the encrypted secret. Without a dedicated sudo secret the field states that `--sudo` reuses the SSH password instead of showing it.
 - `stop-editor` only stops the local configuration editor; it does not stop the SSH daemon, connection cache, or remote sessions.
 
 Installation is complete.

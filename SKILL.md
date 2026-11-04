@@ -93,6 +93,8 @@ mkdir -p ~/.agent-ssh-cli
 
 推荐通过 `agentsshcli edit-config` 替换密码：编辑器保存时会把新密码加密写入 `secrets.json`，配置文件只保留 `passwordRef`。旧配置仍支持被动迁移：若连接包含非空明文 `password`，下一次执行 `exec`、`upload` 或 `download` 时会生成 `secret.key`、加密保存密码，并把明文字段替换为引用。不要在对话、日志或命令输出中展示明文密码。
 
+编辑器“权限边界”页可设置和查看 sudo / su 密码：首次输入按连接名生成独立引用，保存后只把密文写入 `secrets.json`；未单独配置 sudo 密码时，该字段提示执行 `--sudo` 时复用 SSH 密码。
+
 ## trust-host
 
 首次登记须获得用户明确确认；独立核实指纹是推荐方式，不是登记的前置条件。可使用 CLI 首次连接错误中返回的 SHA256 指纹，或通过不发送认证凭据的公钥探测取得指纹，再按上述规则确认并登记：

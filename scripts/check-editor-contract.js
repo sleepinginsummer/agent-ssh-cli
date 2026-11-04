@@ -118,7 +118,7 @@ const formContext = vm.createContext({
   Option: function Option(text, value) { return { text, value }; },
   connections: [{ name: "server", host: "old-host", port: 22, username: "root", privateKey: "key", group: "华东\n生产", tags: ["华东\n生产"] }],
   referenceName: "server", selected: 0,
-  renderJumpHosts() {}, renderSecret() {}, setAuthMode() {}, renderIdentity() {}, validate() {},
+  renderJumpHosts() {}, renderSecrets() {}, setAuthMode() {}, renderIdentity() {}, validate() {},
   authMode: () => "key", markDirty() {}, renderList() {}, renderJson() {}
 });
 formContext.current = () => formContext.connections[0];
@@ -242,8 +242,8 @@ async function checkTrustFlow({ responses, approved = true, invalidateAt, failAt
       const body = JSON.parse(options.body);
       requests.push({ url, body });
       // 按后端的连接范围约束拒绝无关草稿，避免模拟成功掩盖授权请求冲突。
-      const target = body.connections.find(item => item.name === body.connection);
-      if (body.passwordUpdates.some(update => update.connection !== body.connection && update.connection !== target?.jumpHost)) {
+      const target = body.connections.find(item => item.name === body.name);
+      if (body.passwordUpdates.some(update => update.name !== body.name && update.name !== target?.jumpHost)) {
         throw new Error("临时密码只能用于当前连接或跳板机");
       }
       if (invalidateAt === requests.length) valid = false;
@@ -284,22 +284,22 @@ const failed = await checkTrustFlow({ responses: [unknown()], failAt: 2 });
 assert.equal(failed.error, "登记失败");
 assert.equal(failed.requests.length, 2);
 const jumpSnapshot = {
-  connection: "server",
+  name: "server",
   connections: [
     { name: "server", host: "127.0.0.1", jumpHost: "jump" },
     { name: "jump", host: "127.0.0.2" }
   ],
   passwordUpdates: [
-    { connection: "server", password: "target-draft" },
-    { connection: "jump", password: "jump-draft" }
+    { name: "server", value: "target-draft" },
+    { name: "jump", value: "jump-draft" }
   ]
 };
 const jumpBefore = structuredClone(jumpSnapshot);
 const jump = await checkTrustFlow({ responses: [{ ok: false, unknownHostKey: { ...challenge, connection: "jump" } }, { ok: true }, unknown(), { ok: true }, { ok: true }], snapshot: jumpSnapshot });
 assert.equal(jump.error, undefined);
-assert.equal(jump.requests[1].body.connection, "jump");
+assert.equal(jump.requests[1].body.name, "jump");
 assert.deepEqual(jump.requests[1].body.passwordUpdates, [jumpBefore.passwordUpdates[1]]);
-assert.equal(jump.requests[3].body.connection, "server");
+assert.equal(jump.requests[3].body.name, "server");
 assert.deepEqual(jump.requests[3].body.passwordUpdates, jumpBefore.passwordUpdates);
 assert.deepEqual(jump.requests[0].body, jump.requests[2].body);
 assert.deepEqual(jump.requests[0].body, jump.requests[4].body);

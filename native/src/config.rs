@@ -734,20 +734,72 @@ fn decrypt_password(config_path: &Path, password_ref: &str) -> AppResult<String>
         .map_err(|error| AppError::new(format!("本地密码编码非法: {}", error)))
 }
 
-pub(crate) fn reveal_connection_secret(
-    config_path: &Path,
-    connection_name: &str,
-    kind: &str,
-) -> AppResult<String> {
-    if kind != "password" {
-        return Err(AppError::new("不支持的 secret 类型"));
+// 编辑器生成密码引用时使用同一前缀；由后端下发给页面，避免页面硬编码引用协议。
+pub(crate) fn ref_head() -> &'static str {
+    PASSWORD_REF_PREFIX
+}
+
+// 编辑器提交的凭据更新：连接名 + 明文草稿 + 凭据类型（login / sudo / su）。
+pub(crate) struct EditorSecretUpdate {
+    pub(crate) name: String,
+    pub(crate) value: String,
+    pub(crate) kind: String,
+}
+
+// 按凭据类型取连接上的引用字段；未知类型直接拒绝。
+fn credential_ref<'a>(config: &'a Connection, kind: &str) -> AppResult<Option<&'a str>> {
+    Ok(match kind {
+        "sudo" => config.sudo_password_ref.as_deref(),
+        "su" => config.su_password_ref.as_deref(),
+        "login" => config.password_ref.as_deref(),
+        other => return Err(AppError::new(format!("不支持的凭据类型: {}", other))),
+    })
+}
+
+// 缺少引用时说明该类型在执行层的实际行为，避免页面只显示“未配置”。
+fn missing_ref_message(kind: &str, name: &str) -> String {
+    match kind {
+        "sudo" => format!(
+            "连接 {} 未单独配置 sudo 密码，执行 --sudo 时复用 SSH 密码",
+            name
+        ),
+        "su" => format!("连接 {} 未配置 su 密码引用", name),
+        _ => format!("连接 {} 未配置 passwordRef", name),
     }
+}
+
+impl EditorSecretUpdate {
+    // 登录密码用于 SSH 认证，提权凭据不参与测试连接。
+    fn is_login(&self) -> bool {
+        self.kind == "login"
+    }
+
+    // 取本次更新要写入的引用字段，缺引用时返回带类型的说明。
+    fn password_ref<'a>(&self, config: &'a Connection) -> AppResult<&'a str> {
+        credential_ref(config, &self.kind)?
+            .ok_or_else(|| AppError::new(missing_ref_message(&self.kind, &self.name)))
+    }
+}
+
+// 旧调用方与测试按 (连接名, 明文) 构造，默认视为登录密码。
+impl From<(String, String)> for EditorSecretUpdate {
+    fn from((name, value): (String, String)) -> Self {
+        Self {
+            name,
+            value,
+            kind: "login".to_string(),
+        }
+    }
+}
+
+pub(crate) fn read_ref_value(config_path: &Path, name: &str, kind: &str) -> AppResult<String> {
     let configs = load_config(config_path)?;
-    let connection = find_connection(&configs, connection_name)?;
-    let password_ref = connection
-        .password_ref
-        .as_deref()
-        .ok_or_else(|| AppError::new(format!("连接 {} 未配置 passwordRef", connection_name)))?;
+    let config = configs
+        .iter()
+        .find(|item| item.name == name)
+        .ok_or_else(|| AppError::new(format!("未找到连接配置: {}", name)))?;
+    let password_ref = credential_ref(config, kind)?
+        .ok_or_else(|| AppError::new(missing_ref_message(kind, name)))?;
     decrypt_password(config_path, password_ref)
 }
 
@@ -1135,27 +1187,33 @@ pub(crate) fn prepare_editor_test_connections(
     config_path: &Path,
     connections: &serde_json::Value,
     connection_name: &str,
-    password_updates: &[(String, String)],
+    updates: &[EditorSecretUpdate],
 ) -> AppResult<Vec<Connection>> {
     let (mut configs, _) = validate_editor_connections(connections)?;
     let target = find_connection(&configs, connection_name)?;
     let jump_name = target.jump_host.clone();
+    let target_name = target.name.clone();
     let mut updated = HashSet::new();
-    for (name, password) in password_updates {
-        if name != connection_name && jump_name.as_deref() != Some(name.as_str()) {
+    for update in updates {
+        // 测试连接只认证 SSH，提权凭据不参与建连。
+        if !update.is_login() {
+            continue;
+        }
+        let name = update.name.as_str();
+        if name != target_name.as_str() && jump_name.as_deref() != Some(name) {
             return Err(AppError::new("临时密码只能用于当前连接或跳板机"));
         }
-        if password.is_empty() || !updated.insert(name.as_str()) {
+        if update.value.is_empty() || !updated.insert(name) {
             return Err(AppError::new("临时密码不能为空或重复"));
         }
-        let connection = configs
+        let config = configs
             .iter_mut()
-            .find(|item| item.name == *name)
+            .find(|item| item.name == name)
             .ok_or_else(|| AppError::new(format!("未找到连接配置: {}", name)))?;
-        if connection.password_ref.is_none() {
+        if config.password_ref.is_none() {
             return Err(AppError::new(format!("连接 {} 未配置密码引用", name)));
         }
-        connection.password = Some(password.clone());
+        config.password = Some(update.value.clone());
     }
     resolve_password_ref_for_connection(config_path, &mut configs, connection_name)?;
     resolve_jump_password_refs(config_path, &mut configs, connection_name)?;
@@ -1164,24 +1222,22 @@ pub(crate) fn prepare_editor_test_connections(
 
 fn prepare_password_updates(
     config_path: &Path,
-    connections: &[Connection],
+    configs: &[Connection],
     reference_counts: &HashMap<String, usize>,
-    password_updates: &[(String, String)],
+    updates: &[EditorSecretUpdate],
 ) -> AppResult<SecretsFile> {
-    let mut prepared_updates = Vec::with_capacity(password_updates.len());
+    let mut prepared_updates = Vec::with_capacity(updates.len());
     let mut updated_references = HashSet::new();
-    for (connection_name, password) in password_updates {
-        if password.is_empty() {
-            return Err(AppError::new(format!(
-                "连接 {} 的新密码不能为空",
-                connection_name
-            )));
+    for update in updates {
+        let name = update.name.as_str();
+        if update.value.is_empty() {
+            return Err(AppError::new(format!("连接 {} 的新密码不能为空", name)));
         }
-        let connection = find_connection(connections, connection_name)?;
-        let password_ref = connection
-            .password_ref
-            .as_deref()
-            .ok_or_else(|| AppError::new(format!("连接 {} 未配置 passwordRef", connection_name)))?;
+        let config = configs
+            .iter()
+            .find(|item| item.name == name)
+            .ok_or_else(|| AppError::new(format!("未找到连接配置: {}", name)))?;
+        let password_ref = update.password_ref(config)?;
         if reference_counts
             .get(password_ref)
             .copied()
@@ -1199,7 +1255,7 @@ fn prepare_password_updates(
                 password_ref
             )));
         }
-        prepared_updates.push((password_ref.to_string(), password.as_str()));
+        prepared_updates.push((password_ref.to_string(), update.value.as_str()));
     }
 
     let mut secrets = load_secrets(config_path)?;
@@ -1226,7 +1282,7 @@ pub(crate) fn save_editor_config(
     config_path: &Path,
     connections: serde_json::Value,
     expected_hash: &str,
-    password_updates: &[(String, String)],
+    updates: &[EditorSecretUpdate],
 ) -> Result<String, SaveEditorError> {
     let _lock = MigrationLock::acquire(config_path)?;
     editor_transaction::recover_locked(config_path, &secrets_path(config_path)?)?;
@@ -1242,10 +1298,10 @@ pub(crate) fn save_editor_config(
         config_path,
         &normalized,
         &reference_counts,
-        password_updates,
+        updates,
     )?;
 
-    if password_updates.is_empty() {
+    if updates.is_empty() {
         write_config_values(config_path, values)?;
     } else {
         let config_bytes = serde_json::to_vec_pretty(values)?;
@@ -1643,13 +1699,13 @@ mod tests {
             &path,
             document.connections,
             &document.hash,
-            &[("server".to_string(), "new-secret".to_string())],
+            &[("server".to_string(), "new-secret".to_string()).into()],
         )
         .unwrap();
 
         assert_eq!(hash, hash_file(&path).unwrap());
         assert_eq!(
-            reveal_connection_secret(&path, "server", "password").unwrap(),
+            read_ref_value(&path, "server", "login").unwrap(),
             "new-secret"
         );
         let raw = fs::read_to_string(&path).unwrap();
@@ -1671,7 +1727,7 @@ mod tests {
             &path,
             &draft,
             "target",
-            &[("target".into(), "draft-password".into())],
+            &[("target".to_string(), "draft-password".to_string()).into()],
         )
         .unwrap();
         assert_eq!(configs[0].host, "new.example");
@@ -1691,8 +1747,8 @@ mod tests {
         );
         let draft: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         for updates in [
-            vec![("other".into(), "secret".into())],
-            vec![("target".into(), "a".into()), ("target".into(), "b".into())],
+            vec![("other".to_string(), "secret".to_string()).into()],
+            vec![("target".to_string(), "a".to_string()).into(), ("target".to_string(), "b".to_string()).into()],
         ] {
             assert!(prepare_editor_test_connections(&path, &draft, "target", &updates).is_err());
         }
@@ -1730,7 +1786,7 @@ mod tests {
             &path,
             serde_json::Value::Array(connections),
             &document.hash,
-            &[("a".to_string(), "new-secret".to_string())],
+            &[("a".to_string(), "new-secret".to_string()).into()],
         )
         .unwrap_err();
         assert!(error.to_string().contains("被多个字段共享"));
@@ -1749,5 +1805,59 @@ mod tests {
         assert!(!resolve_pty(&configs[0], Some(false)));
         assert!(!resolve_pty(&configs[1], None));
         assert!(resolve_pty(&configs[1], Some(true)));
+    }
+
+    #[test]
+    fn editor_privilege_credentials_reveal_and_save_by_kind() {
+        let login_ref = format!("{}server", ref_head());
+        let config = serde_json::json!([{
+            "name": "server",
+            "host": "127.0.0.1",
+            "username": "root",
+            "passwordRef": login_ref,
+            "privilegeEnabled": true,
+            "sudoUser": "root"
+        }]);
+        let (_dir, path) = write_config(&serde_json::to_string(&config).unwrap());
+        prepare_editor_config(&path).unwrap();
+        let hash = save_editor_config(
+            &path,
+            config.clone(),
+            &hash_file(&path).unwrap(),
+            &[("server".to_string(), "ssh-pass".to_string()).into()],
+        )
+        .unwrap();
+
+        // 未单独配置提权凭据时登录密码仍可查看，提权类型给出各自的缺引用说明。
+        assert_eq!(read_ref_value(&path, "server", "login").unwrap(), "ssh-pass");
+        assert!(read_ref_value(&path, "server", "sudo")
+            .unwrap_err()
+            .to_string()
+            .contains("复用 SSH 密码"));
+        assert!(read_ref_value(&path, "server", "su")
+            .unwrap_err()
+            .to_string()
+            .contains("su 密码引用"));
+        assert!(read_ref_value(&path, "server", "unknown").is_err());
+
+        // 页面按 kind 提交提权密码：引用由页面生成，密文只写入 secrets.json。
+        let mut items = config.as_array().unwrap().clone();
+        items[0].as_object_mut().unwrap().insert(
+            "sudoPasswordRef".to_string(),
+            serde_json::json!(format!("{}server:sudo", ref_head())),
+        );
+        let mut update: EditorSecretUpdate = ("server".to_string(), "sudo-pass".to_string()).into();
+        update.kind = "sudo".to_string();
+        let hash = save_editor_config(
+            &path,
+            serde_json::Value::Array(items),
+            &hash,
+            &[update],
+        )
+        .unwrap();
+        assert_eq!(read_ref_value(&path, "server", "sudo").unwrap(), "sudo-pass");
+        assert_eq!(read_ref_value(&path, "server", "login").unwrap(), "ssh-pass");
+        assert_eq!(hash, hash_file(&path).unwrap());
+        assert!(!fs::read_to_string(&path).unwrap().contains("sudo-pass"));
     }
 }

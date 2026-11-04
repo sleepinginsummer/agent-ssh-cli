@@ -374,7 +374,7 @@
               <div class="fields">
                 <div class="field span-3"><span class="label">认证方式</span><div class="mode-switch" aria-label="认证方式"><button class="active" type="button" data-auth="password">密码引用</button><button type="button" data-auth="key">私钥</button></div></div>
                 <div class="field span-4" data-auth-field="password"><label for="f-passwordRef">密码引用</label><input class="mono" id="f-passwordRef" data-field="passwordRef" placeholder="agentsshcli:connection"></div>
-                <div class="field span-5" data-auth-field="password"><label for="f-password">密码</label><div class="secret-control"><input id="f-password" data-secret="password" type="password" autocomplete="new-password" placeholder="输入密码"><button class="icon-btn" type="button" data-reveal="password" title="查看已保存密码" aria-label="查看已保存密码"><svg class="icon" aria-hidden="true"><use href="#i-eye"></use></svg></button></div><div class="secret-meta" data-secret-meta="password">未加载明文</div></div>
+                <div class="field span-5" data-auth-field="password"><label for="f-password">密码</label><div class="secret-control"><input id="f-password" data-secret="login" type="password" autocomplete="new-password" placeholder="输入密码"><button class="icon-btn" type="button" data-reveal="login" title="查看已保存密码" aria-label="查看已保存密码"><svg class="icon" aria-hidden="true"><use href="#i-eye"></use></svg></button></div><div class="secret-meta" data-secret-meta="login">未加载明文</div></div>
                 <div class="field span-6" data-auth-field="key"><label for="f-privateKey">私钥路径</label><input class="mono" id="f-privateKey" data-field="privateKey" placeholder="~/.ssh/id_ed25519"></div>
                 <div class="field span-3" data-auth-field="key"><label for="f-passphrase">私钥口令</label><input id="f-passphrase" data-field="passphrase" type="password" autocomplete="new-password" placeholder="无口令时留空"></div>
               </div>
@@ -388,8 +388,10 @@
                 <div class="field span-12"><div class="toggle-row"><svg class="icon" aria-hidden="true"><use href="#i-shield-check"></use></svg><div class="toggle-copy"><strong>允许 sudo / su</strong><span>执行前校验权限</span></div><label class="toggle" aria-label="允许提权"><input id="f-privilegeEnabled" data-bool="privilegeEnabled" type="checkbox"><span class="toggle-ui"></span></label></div></div>
                 <div class="field span-2"><label for="f-sudoUser">sudo 用户</label><input class="mono" id="f-sudoUser" data-field="sudoUser" placeholder="root"></div>
                 <div class="field span-4"><label for="f-sudoPasswordRef">sudo 密码引用</label><input class="mono" id="f-sudoPasswordRef" data-field="sudoPasswordRef" placeholder="agentsshcli:name:sudo"></div>
+                <div class="field span-6"><label for="f-sudoPassword">sudo 密码</label><div class="secret-control"><input id="f-sudoPassword" data-secret="sudo" type="password" autocomplete="new-password" placeholder="输入密码"><button class="icon-btn" type="button" data-reveal="sudo" title="查看已保存的 sudo 密码" aria-label="查看已保存的 sudo 密码"><svg class="icon" aria-hidden="true"><use href="#i-eye"></use></svg></button></div><div class="secret-meta" data-secret-meta="sudo">未单独配置，执行 --sudo 时复用 SSH 密码</div></div>
                 <div class="field span-2"><label for="f-suUser">su 用户</label><input class="mono" id="f-suUser" data-field="suUser" placeholder="root"></div>
                 <div class="field span-4"><label for="f-suPasswordRef">su 密码引用</label><input class="mono" id="f-suPasswordRef" data-field="suPasswordRef" placeholder="agentsshcli:name:su"></div>
+                <div class="field span-6"><label for="f-suPassword">su 密码</label><div class="secret-control"><input id="f-suPassword" data-secret="su" type="password" autocomplete="new-password" placeholder="输入密码"><button class="icon-btn" type="button" data-reveal="su" title="查看已保存的 su 密码" aria-label="查看已保存的 su 密码"><svg class="icon" aria-hidden="true"><use href="#i-eye"></use></svg></button></div><div class="secret-meta" data-secret-meta="su">未配置，执行 --su 前需要先保存密码</div></div>
               </div>
             </section>
           </div>
@@ -465,6 +467,8 @@
     let savedConnections = structuredClone(seed);
     let savedByItem = new WeakMap();
     let configHash = "";
+    let secretRefPrefix = "";
+    let draftValue = "";
     let editVersion = 0;
     let referenceName = connections[0]?.name || "";
     const secretUi = new WeakMap();
@@ -775,16 +779,25 @@
       field.value = value;
     }
 
-    function secretState(item) {
-      if (!secretUi.has(item)) {
-        secretUi.set(item, { draftValue: "", revealedValue: "", mode: "empty", visible: false, timer: 0, createdRef: false });
-      }
-      return secretUi.get(item);
+    // 登录密码、sudo 密码、su 密码各自独立保存草稿和查看状态。
+    const SECRET_KINDS = [
+      { kind: "login", refField: "passwordRef", refSuffix: "", empty: "未保存密码", action: "查看已保存密码" },
+      { kind: "sudo", refField: "sudoPasswordRef", refSuffix: ":sudo", empty: "未单独配置，执行 --sudo 时复用 SSH 密码", action: "查看已保存的 sudo 密码" },
+      { kind: "su", refField: "suPasswordRef", refSuffix: ":su", empty: "未配置，执行 --su 前需要先保存密码", action: "查看已保存的 su 密码" }
+    ];
+
+    function secretSpec(kind) {
+      return SECRET_KINDS.find(entry => entry.kind === kind) || SECRET_KINDS[0];
     }
 
-    function clearSecretState(item) {
-      const state = secretUi.get(item);
-      if (!state) return;
+    function secretState(item, kind = "login") {
+      if (!secretUi.has(item)) secretUi.set(item, {});
+      const states = secretUi.get(item);
+      if (!states[kind]) states[kind] = { draftValue: "", revealedValue: "", mode: "empty", visible: false, timer: 0, createdRef: false };
+      return states[kind];
+    }
+
+    function resetSecretState(state) {
       clearTimeout(state.timer);
       state.draftValue = "";
       state.revealedValue = "";
@@ -793,62 +806,78 @@
       state.createdRef = false;
     }
 
-    function renderSecret() {
+    function clearSecretState(item) {
+      const states = secretUi.get(item);
+      if (states) Object.values(states).forEach(resetSecretState);
+    }
+
+    function clearSecretKind(item, kind) {
+      const state = secretUi.get(item)?.[kind];
+      if (state) resetSecretState(state);
+    }
+
+    function renderSecrets() {
       const item = current();
-      const state = secretState(item);
-      const field = $("#f-password");
-      const reveal = $("[data-reveal=\"password\"]");
-      const meta = $("[data-secret-meta=\"password\"]");
-      // 草稿是本机刚输入的明文，可直接切换显示；已保存密码只以只读明文短暂展示。
-      const plain = state.visible && (state.mode === "draft" || state.mode === "revealed");
-      const label = plain ? "隐藏密码" : state.mode === "draft" ? "显示密码" : "查看已保存密码";
-      field.value = state.mode === "revealed" ? state.revealedValue : state.draftValue;
-      field.readOnly = state.mode === "revealed";
-      field.placeholder = item.passwordRef ? "输入新密码以替换" : "输入密码";
-      field.type = plain ? "text" : "password";
-      reveal.disabled = state.mode === "empty" && !item.passwordRef;
-      reveal.title = label;
-      reveal.setAttribute("aria-label", label);
-      reveal.querySelector("use").setAttribute("href", plain ? "#i-eye-off" : "#i-eye");
-      meta.textContent = state.mode === "draft" ? "新密码待保存" : state.mode === "revealed" ? "只读明文将在短时间后清除" : item.passwordRef ? "已加密" : "未保存密码";
-      meta.classList.toggle("revealed", state.mode === "revealed");
+      if (!item) return;
+      SECRET_KINDS.forEach(spec => {
+        const state = secretState(item, spec.kind);
+        const field = $(`[data-secret="${spec.kind}"]`);
+        const reveal = $(`[data-reveal="${spec.kind}"]`);
+        const meta = $(`[data-secret-meta="${spec.kind}"]`);
+        if (!field || !reveal || !meta) return;
+        const saved = Boolean(item[spec.refField]);
+        // 草稿是本机刚输入的明文，可直接切换显示；已保存密码只以只读明文短暂展示。
+        const plain = state.visible && (state.mode === "draft" || state.mode === "revealed");
+        const label = plain ? "隐藏密码" : state.mode === "draft" ? "显示密码" : spec.action;
+        field.value = state.mode === "revealed" ? state.revealedValue : state.draftValue;
+        field.readOnly = state.mode === "revealed";
+        field.placeholder = saved ? "输入新密码以替换" : "输入密码";
+        field.type = plain ? "text" : "password";
+        reveal.disabled = state.mode === "empty" && !saved;
+        reveal.title = label;
+        reveal.setAttribute("aria-label", label);
+        reveal.querySelector("use").setAttribute("href", plain ? "#i-eye-off" : "#i-eye");
+        meta.textContent = state.mode === "draft" ? "新密码待保存" : state.mode === "revealed" ? "只读明文将在短时间后清除" : saved ? "已加密" : spec.empty;
+        meta.classList.toggle("revealed", state.mode === "revealed");
+      });
     }
 
     // 查看状态只读；聚焦后清除已显示明文，只有实际输入才生成密码草稿。
-    function beginPasswordInput() {
-      const state = secretState(current());
+    function beginSecretInput(kind) {
+      const state = secretState(current(), kind);
       if (state.mode !== "revealed") return;
       clearTimeout(state.timer);
       state.revealedValue = "";
       state.draftValue = "";
       state.mode = "empty";
       state.visible = false;
-      renderSecret();
+      renderSecrets();
     }
 
-    async function revealPassword() {
+    async function revealSecret(kind) {
       const item = current();
-      const state = secretState(item);
+      const spec = secretSpec(kind);
+      const state = secretState(item, kind);
       // 未保存的密码草稿只在本机切换显隐，不请求服务端解密。
       if (state.mode === "draft") {
         state.visible = !state.visible;
-        renderSecret();
+        renderSecrets();
         return;
       }
       if (state.mode === "revealed" && state.revealedValue) {
         state.visible = !state.visible;
-        renderSecret();
+        renderSecrets();
         return;
       }
-      if (!item.passwordRef) return toast("当前连接没有可解密的密码引用");
+      if (!item[spec.refField]) return toast(spec.empty);
       if (location.protocol === "file:") return toast("请通过 agentsshcli edit-config 启动后查看密码");
-      const button = $("[data-reveal=\"password\"]");
+      const button = $(`[data-reveal="${kind}"]`);
       button.disabled = true;
       try {
         const payload = await apiRequest("/api/secrets/reveal", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ connection: item.name, kind: "password" })
+          body: JSON.stringify({ name: item.name, kind })
         });
         state.revealedValue = payload.secret;
         state.mode = "revealed";
@@ -859,12 +888,12 @@
           state.revealedValue = "";
           state.visible = false;
           state.mode = "empty";
-          if (current() === item) renderSecret();
+          if (current() === item) renderSecrets();
         }, 15000);
       } catch (error) {
         toast(error.message);
       } finally {
-        renderSecret();
+        renderSecrets();
       }
     }
 
@@ -884,7 +913,7 @@
       $("#tag-input").value = "";
       renderClassificationFields();
       renderJumpHosts();
-      renderSecret();
+      renderSecrets();
       setAuthMode(authMode(item), false);
       renderIdentity();
       validate();
@@ -955,17 +984,20 @@
       const item = current();
       if (event?.target.id === "tag-input") return;
       if (event?.target.matches("[data-secret]")) {
-        const state = secretState(item);
+        const spec = secretSpec(event.target.dataset.secret);
+        const state = secretState(item, spec.kind);
         clearTimeout(state.timer);
         state.draftValue = event.target.value;
-        if (state.draftValue && !item.passwordRef) {
-          item.passwordRef = `agentsshcli:${item.name || "connection"}`;
+        if (state.draftValue && !item[spec.refField]) {
+          // 首次输入明文时按连接名生成引用，和登录密码沿用同一引用前缀。
+          if (!item.name) return toast("请先填写连接名称");
+          item[spec.refField] = `${secretRefPrefix}${item.name}${spec.refSuffix}`;
           state.createdRef = true;
-          $("#f-passwordRef").value = item.passwordRef;
+          $(`#f-${spec.refField}`).value = item[spec.refField];
         } else if (!state.draftValue && state.createdRef) {
-          delete item.passwordRef;
+          delete item[spec.refField];
           state.createdRef = false;
-          $("#f-passwordRef").value = "";
+          $(`#f-${spec.refField}`).value = "";
         }
         state.mode = state.draftValue ? "draft" : "empty";
         // 清空草稿后收回明文；继续输入时保留用户选择的显隐状态。
@@ -973,7 +1005,7 @@
         markDirty();
         renderJson();
         validate();
-        renderSecret();
+        renderSecrets();
         return;
       }
       scalarFields.forEach(({ key, type }) => {
@@ -1066,15 +1098,19 @@
 
     function connectionChanged(item) {
       const saved = savedByItem.get(item);
-      const state = secretUi.get(item);
-      return !saved || JSON.stringify(ordered(item)) !== JSON.stringify(ordered(saved)) || Boolean(state?.mode === "draft" && state.draftValue);
+      return SECRET_KINDS.some(spec => {
+        const state = secretUi.get(item)?.[spec.kind];
+        return state?.mode === "draft" && Boolean(state.draftValue);
+      });
     }
 
     function markDirty() { editVersion += 1; setTestStatus(); updateSyncState(); }
     function updateSyncState() {
       dirty = (jsonSource.classList.contains("active") && jsonSource.value !== jsonText()) || !connectionsSemanticallyEqual(connections, savedConnections) || connections.some(item => {
-        const state = secretUi.get(item);
-        return state?.mode === "draft" && Boolean(state.draftValue);
+        return SECRET_KINDS.some(spec => {
+          const state = secretUi.get(item)?.[spec.kind];
+          return state?.mode === "draft" && Boolean(state.draftValue);
+        });
       });
       $("#save").classList.toggle("dirty", dirty);
       $("#discard").disabled = !dirty || $("#save").disabled;
@@ -1187,14 +1223,17 @@
       previousStates.forEach(({ item, state }) => {
         if (!state) return;
         const next = nextByName.get(item.name);
-        if (state.mode === "draft" && (!next || next.passwordRef !== item.passwordRef)) {
-          throw new Error(`连接“${item.name}”有待保存密码，请先保存或清空密码草稿`);
-        }
-        if (!next || (state.mode === "revealed" && next.passwordRef !== item.passwordRef)) {
-          clears.push(item);
-        } else {
-          transfers.push({ item: next, state });
-        }
+        let clear = !next;
+        SECRET_KINDS.forEach(spec => {
+          const kindState = state[spec.kind];
+          if (!kindState) return;
+          const changedRef = !next || next[spec.refField] !== item[spec.refField];
+          if (kindState.mode === "draft" && changedRef) {
+            throw new Error(`连接“${item.name}”有待保存密码，请先保存或清空密码草稿`);
+          }
+          if (kindState.mode === "revealed" && changedRef) clear = true;
+        });
+        if (clear) clears.push(item); else transfers.push({ item: next, state });
       });
       return { transfers, clears };
     }
@@ -1339,10 +1378,12 @@
         }
         if (typeof payload.hash !== "string" || !payload.hash) throw new Error("编辑器配置版本格式错误");
         if (typeof payload.path !== "string" || !payload.path) throw new Error("编辑器配置路径格式错误");
+        if (typeof payload.secretRefPrefix !== "string" || !payload.secretRefPrefix) throw new Error("编辑器凭据引用前缀格式错误");
         const snapshot = {
           connections: nextConnections,
           commandBlacklist: nextBlacklist,
           hash: payload.hash,
+          secretRefPrefix: payload.secretRefPrefix,
           path: payload.path
         };
 
@@ -1354,6 +1395,7 @@
         connections = snapshot.connections;
         defaultCommandBlacklist = snapshot.commandBlacklist;
         configHash = snapshot.hash;
+        secretRefPrefix = snapshot.secretRefPrefix;
         selected = 0;
         referenceName = connections[0].name;
         captureSavedSnapshot(connections);
@@ -1385,9 +1427,9 @@
       const target = snapshot.connections.find(item => item.name === challenge.connection);
       // 授权跳板机时排除原目标的密码草稿，原快照仍用于后续测试。
       const passwordUpdates = snapshot.passwordUpdates.filter(update =>
-        update.connection === challenge.connection || update.connection === target?.jumpHost
+        update.name === challenge.connection || update.name === target?.jumpHost
       );
-      return { ...snapshot, connection: challenge.connection, fingerprint: challenge.fingerprint, passwordUpdates };
+      return { ...snapshot, name: challenge.connection, fingerprint: challenge.fingerprint, passwordUpdates };
     }
 
     // 每个异步边界后检查快照有效性，过期结果不再影响当前连接。
@@ -1431,9 +1473,9 @@
       const version = editVersion;
       const isCurrent = () => current() === target && editVersion === version;
       const passwordUpdates = testItems.flatMap(item => {
-        const state = secretUi.get(item);
+        const state = secretUi.get(item)?.login;
         return state?.mode === "draft" && state.draftValue
-          ? [{ connection: item.name, password: state.draftValue }] : [];
+          ? [{ name: item.name, value: state.draftValue, kind: "login" }] : [];
       });
       const button = $("#test-connection");
       button.disabled = true;
@@ -1441,7 +1483,7 @@
       setTestStatus("正在连接...");
       try {
         // 固定测试快照，信任与重试均使用同一份配置，避免登记到后来修改的地址。
-        const snapshot = structuredClone({ connections: testItems, connection: target.name, passwordUpdates });
+        const snapshot = structuredClone({ connections: testItems, name: target.name, passwordUpdates });
         await testAndTrustConnection(snapshot, isCurrent);
       } catch (error) {
         if (isCurrent()) setTestStatus(`连接失败：${error.message}`, "failure");
@@ -1499,13 +1541,13 @@
 
       const saveConnections = structuredClone(connections);
       const savedItems = connections.slice();
-      const draftSnapshots = connections.flatMap(item => {
-        const state = secretUi.get(item);
-        return item.passwordRef && state?.mode === "draft" && state.draftValue
-          ? [{ item, state, connection: item.name, password: state.draftValue }]
+      const draftSnapshots = savedItems.flatMap(item => SECRET_KINDS.flatMap(spec => {
+        const state = secretUi.get(item)?.[spec.kind];
+        return item[spec.refField] && state?.mode === "draft" && state.draftValue
+          ? [{ item, state, kind: spec.kind, name: item.name, value: state.draftValue }]
           : [];
-      });
-      const passwordUpdates = draftSnapshots.map(({ connection, password }) => ({ connection, password }));
+      }));
+      const passwordUpdates = draftSnapshots.map(({ name, value, kind }) => ({ name, value, kind }));
       const button = $("#save");
       button.disabled = true;
       $("#discard").disabled = true;
@@ -1517,15 +1559,15 @@
         });
         configHash = payload.hash;
         draftSnapshots.forEach(snapshot => {
-          const state = secretUi.get(snapshot.item);
-          if (state === snapshot.state && state.mode === "draft" && state.draftValue === snapshot.password) {
-            clearSecretState(snapshot.item);
+          const state = secretUi.get(snapshot.item)?.[snapshot.kind];
+          if (state === snapshot.state && state.mode === "draft" && state.draftValue === snapshot.value) {
+            clearSecretKind(snapshot.item, snapshot.kind);
           }
         });
         captureSavedSnapshot(saveConnections, savedItems);
         transferSavedIdentities(savedItems, connections);
         updateSyncState();
-        renderSecret();
+        renderSecrets();
         toast("配置已保存");
       } catch (error) {
         toast(error.message);
@@ -1554,12 +1596,12 @@
       renderList();
     }));
     form.addEventListener("input", updateFromForm);
-    $("#f-password").addEventListener("focus", beginPasswordInput);
+    $$("[data-secret]").forEach(field => field.addEventListener("focus", () => beginSecretInput(field.dataset.secret)));
     form.addEventListener("click", event => {
       const auth = event.target.closest("[data-auth]");
       const reveal = event.target.closest("[data-reveal]");
       if (auth) setAuthMode(auth.dataset.auth);
-      if (reveal) revealPassword();
+      if (reveal) revealSecret(reveal.dataset.reveal);
     });
 
     $$(".tab").forEach(tab => tab.addEventListener("click", () => {

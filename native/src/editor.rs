@@ -12,8 +12,9 @@ use self::process::{
 pub(crate) use self::process::{start_editor, stop_editor};
 use crate::config::{
     find_connection, prepare_editor_config, prepare_editor_test_connections, read_editor_config,
-    reveal_connection_secret, save_editor_config, SaveEditorError,
+    read_ref_value, save_editor_config, EditorSecretUpdate, SaveEditorError,
 };
+use crate::config::ref_head;
 use crate::runtime::run_with_timeout;
 use crate::ssh::connect_russh;
 use crate::{AppError, AppResult};
@@ -48,15 +49,18 @@ impl Drop for TestSlot {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RevealRequest {
-    connection: String,
+    name: String,
     kind: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PasswordUpdate {
-    connection: String,
-    password: String,
+    name: String,
+    value: String,
+    // 旧页面只提交登录密码，缺省按登录密码处理。
+    #[serde(default = "default_secret_kind")]
+    kind: String,
 }
 
 #[derive(Deserialize)]
@@ -72,7 +76,7 @@ struct SaveRequest {
 #[serde(rename_all = "camelCase")]
 struct TestConnectionRequest {
     connections: serde_json::Value,
-    connection: String,
+    name: String,
     #[serde(default)]
     password_updates: Vec<PasswordUpdate>,
     #[serde(default)]
@@ -174,15 +178,35 @@ fn handle_config_read(
         "path": config_path.to_string_lossy(),
         "connections": document.connections,
         "defaults": defaults,
+        "secretRefPrefix": ref_head(),
         "hash": document.hash
     })))
 }
 
+fn default_secret_kind() -> String {
+    "login".to_string()
+}
+
+// 页面按连接逐条提交凭据草稿；kind 缺省为登录密码。
+fn parse_secret_updates(
+    items: Vec<PasswordUpdate>,
+) -> Result<Vec<EditorSecretUpdate>, ApiFailure> {
+    items
+        .into_iter()
+        .map(|item| {
+            let mut update = EditorSecretUpdate::from( (item.name, item.value));
+            update.kind = item.kind;
+            Ok(update)
+        })
+        .collect()
+}
+
 fn handle_secret_reveal(body: &[u8], config_path: &Path) -> Result<ApiAction, ApiFailure> {
     let payload: RevealRequest = serde_json::from_slice(body).map_err(ApiFailure::bad_request)?;
-    let secret =
-        reveal_connection_secret(config_path, payload.connection.trim(), payload.kind.trim())
-            .map_err(ApiFailure::bad_request)?;
+    let name = payload.name.trim();
+    let kind = payload.kind.trim();
+    let secret = read_ref_value(config_path, name, kind)
+        .map_err(ApiFailure::bad_request)?;
     Ok(ApiAction::Json(
         serde_json::json!({"secret": secret, "expiresIn": 15}),
     ))
@@ -190,11 +214,7 @@ fn handle_secret_reveal(body: &[u8], config_path: &Path) -> Result<ApiAction, Ap
 
 fn handle_config_save(body: &[u8], config_path: &Path) -> Result<ApiAction, ApiFailure> {
     let payload: SaveRequest = serde_json::from_slice(body).map_err(ApiFailure::bad_request)?;
-    let updates: Vec<(String, String)> = payload
-        .password_updates
-        .into_iter()
-        .map(|item| (item.connection, item.password))
-        .collect();
+    let updates = parse_secret_updates(payload.password_updates)?;
     match save_editor_config(
         config_path,
         payload.connections,
@@ -218,12 +238,8 @@ fn handle_connection_test(
 ) -> Result<serde_json::Value, ApiFailure> {
     let payload: TestConnectionRequest =
         serde_json::from_slice(body).map_err(ApiFailure::bad_request)?;
-    let updates: Vec<(String, String)> = payload
-        .password_updates
-        .into_iter()
-        .map(|item| (item.connection, item.password))
-        .collect();
-    let name = payload.connection.as_str();
+    let updates = parse_secret_updates(payload.password_updates)?;
+    let name = payload.name.as_str();
     let configs =
         prepare_editor_test_connections(config_path, &payload.connections, name, &updates)
             .map_err(ApiFailure::bad_request)?;
@@ -374,17 +390,16 @@ mod tests {
                 "passwordRef": "agentsshcli:server"
             }],
             "expectedHash": "abc123",
-            "passwordUpdates": [{
-                "connection": "server",
-                "password": "new-secret"
+            "passwordUpdates": [{"name": "server",
+                "value": "new-secret"
             }]
         }))
         .unwrap();
 
         assert_eq!(payload.expected_hash, "abc123");
         assert_eq!(payload.password_updates.len(), 1);
-        assert_eq!(payload.password_updates[0].connection, "server");
-        assert_eq!(payload.password_updates[0].password, "new-secret");
+        assert_eq!(payload.password_updates[0].name, "server");
+        assert_eq!(payload.password_updates[0].value, "new-secret");
     }
 
     #[test]
@@ -434,9 +449,9 @@ mod tests {
         });
         let directory = tempfile::tempdir().unwrap();
         let body = serde_json::to_vec(&serde_json::json!({
-            "connection": "server",
+            "name": "server",
             "connections": [{"name":"server","host":"127.0.0.1","port":port,"username":"test","passwordRef":"agentsshcli:server"}],
-            "passwordUpdates": [{"connection":"server","password":"draft-secret"}]
+            "passwordUpdates": [{"name":"server","value":"draft-secret"}]
         })).unwrap();
         let response =
             handle_connection_test(&body, &directory.path().join("config.json")).unwrap();
@@ -476,9 +491,9 @@ mod tests {
             false
         });
         let body = serde_json::json!({
-            "connection": " server ",
+            "name": " server ",
             "connections": [{"name":" server ","host":"127.0.0.1","port":port,"username":"root","passwordRef":"agentsshcli:server"}],
-            "passwordUpdates": [{"connection":" server ","password":"draft"}]
+            "passwordUpdates": [{"name":" server ","value":"draft"}]
         });
         let response = handle_connection_test(&serde_json::to_vec(&body).unwrap(), &path);
         assert!(accepted.join().unwrap());
@@ -582,9 +597,9 @@ mod tests {
             ssh_port
         )).unwrap();
         let body = serde_json::json!({
-            "connection": "draft",
+            "name": "draft",
             "connections": [{"name":"draft","host":"127.0.0.1","port":ssh_port,"username":"root","passwordRef":"agentsshcli:draft"}],
-            "passwordUpdates": [{"connection":"draft","password":"draft-secret"}]
+            "passwordUpdates": [{"name":"draft","value":"draft-secret"}]
         }).to_string();
         let request = format!(
             "POST /api/connections/test HTTP/1.1\r\nHost: 127.0.0.1:{{port}}\r\nX-Editor-Token: test-token\r\nContent-Length: {}\r\n\r\n{}",

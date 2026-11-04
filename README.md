@@ -12,7 +12,7 @@
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white" alt="Node.js >=18"></a>
   <a href="https://www.npmjs.com/"><img src="https://img.shields.io/badge/npm-%3E%3D8-CB3837?logo=npm&logoColor=white" alt="npm >=8"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli"><img src="https://img.shields.io/badge/sys-win%2Fmac%2Flinux-0078D6" alt="sys win/mac/linux"></a>
-  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.7.1-blue" alt="release v0.7.1"></a>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.8.0-blue" alt="release v0.8.0"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
 </p>
 
@@ -170,6 +170,7 @@ agentsshcli stop-editor --config /path/to/config.json
 - JSON 面板支持“全局 / 当前连接”以及“预览 / 源码”；源码应用前仍会经过与表单一致的配置校验。
 - “测试连接”使用当前连接及其跳板机的页面草稿（含未保存的临时密码），验证 SSH 建连和认证后立即断开；不会保存配置或执行远端命令。单次最长等待 15 秒，同一时刻只运行一个测试。
 - 替换密码时只持久化加密后的 secret 和 `passwordRef`；复制连接不会复制密码引用或解密值。
+- 权限边界页可输入并查看 sudo / su 密码：首次输入按连接名生成独立引用，保存后同样只加密写入 `secrets.json`；未单独配置 sudo 密码时该字段提示执行 `--sudo` 时复用 SSH 密码，不展示登录密码。
 - 编辑器不提供连接级 PTY 开关，但会保留旧配置中的 `pty`；临时控制继续使用 `exec --pty` / `--no-pty`。
 - `stop-editor` 只停止本地配置编辑器，不会停止 SSH daemon、连接缓存或远端会话。
 
