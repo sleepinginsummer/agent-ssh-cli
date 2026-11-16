@@ -27,11 +27,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             platform: darwin
             arch: arm64
-          - os: macos-14
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             platform: darwin
             arch: x64

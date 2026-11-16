@@ -1,7 +1,17 @@
 # Release Notes
 
 
+## v0.8.2
+
+修复旧版 su 提权，并恢复五平台发布构建：
+
+- 包含 v0.8.1 的全部提权修复：旧版 coreutils su 自动使用 SSH 终端，等待密码提示后发送凭据；终端认证重复索要密码时及时返回失败。
+- GitHub 已退役 macOS 14 runner，macOS 构建改用 `macos-15`（arm64）和 `macos-15-intel`（x64）；保留五平台全部构建通过后才发布及发布后包自检。
+- 验证：`npm test` 89 项通过；release 构建与版本一致性检查通过；修复后的提权在真实 CentOS 6 服务器返回 `root`、UID `0`。
+
 ## v0.8.1
+
+此版本因 macOS 14 runner 退役导致构建中止，未发布 npm 包；修复随 v0.8.2 发布。
 
 修复旧版 su 的终端兼容与终端认证等待问题：
 
