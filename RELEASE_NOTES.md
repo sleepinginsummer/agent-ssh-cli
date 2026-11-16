@@ -1,6 +1,16 @@
 # Release Notes
 
 
+## v0.8.1
+
+修复旧版 su 的终端兼容与终端认证等待问题：
+
+- 不支持 `-P/--pty` 的 su 报 `standard in must be a tty` 时，自动改用 SSH 伪终端，并等待英文密码提示后发送凭据，兼容旧版 coreutils su。
+- 保留现有 util-linux su 的管道认证路径；仅在明确的终端错误时重试，密码错误和普通命令失败保持原样返回。
+- 终端认证发送一次密码后再次索要密码时，关闭本次通道并返回认证失败，避免一直等到总超时。
+- 补充本机 SSH 通道回归测试，覆盖旧版 su 终端要求、分包密码提示，以及 su/sudo 认证成功和重复提示失败。
+- 验证：`npm test` 89 项通过；`npm run build:native` release 构建通过；真实 CentOS 6 服务器的 `--su` 和 `--pty --su` 均返回 `root`、UID `0`。
+
 ## v0.8.0
 
 配置编辑器支持在「权限边界」页管理 sudo / su 密码：

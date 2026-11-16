@@ -79,7 +79,7 @@ pub fn su_pty_command(user: &str, command: &str) -> String {
 }
 
 pub fn su_command(user: &str, command: &str) -> String {
-    // su 的 stdin 是 SSH 通道管道（非 tty），PAM 会逐字节读取到换行符，密码可在提示符之前写入。
+    // 先用管道传密码；要求终端的旧版 su 由 exec.rs 分配 SSH PTY 并等待密码提示。
     format!(
         "su -c {} {}",
         shell_single_quote(&inner_command(command)),

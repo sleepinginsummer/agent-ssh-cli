@@ -184,6 +184,18 @@ pub(crate) struct RusshClient {
     key_sender: Option<tokio::sync::oneshot::Sender<String>>,
 }
 
+#[cfg(test)]
+impl RusshClient {
+    // 回归测试使用独立 known_hosts，避免读写用户的 SSH 信任记录。
+    pub(crate) fn for_test(port: u16, known_hosts_path: PathBuf) -> Self {
+        Self {
+            host: "127.0.0.1".into(),
+            port,
+            known_hosts_path,
+            key_sender: None,
+        }
+    }
+}
 impl client::Handler for RusshClient {
     type Error = russh::Error;
 

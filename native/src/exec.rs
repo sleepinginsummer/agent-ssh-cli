@@ -3,6 +3,7 @@
 // 与 `privilege.rs` 的分工：本模块处理会话、通道与密码写入时序等 I/O 行为，
 // `privilege.rs` 只负责生成提权命令行字符串。
 
+use crate::config::Connection;
 use crate::privilege::{
     su_command, su_pty_command, sudo_command, sudo_passwordless_command, sudo_requires_tty,
     PrivilegeMode, SUDO_PROMPT_MARKER, SUDO_REQUIRE_TTY_PROBE, SU_PTY_PROBE,
@@ -10,7 +11,6 @@ use crate::privilege::{
 use crate::runtime::run_with_timeout;
 use crate::ssh::{connect_russh, RusshClient};
 use crate::{AppError, AppResult};
-use crate::config::{Connection};
 
 use russh::{client, ChannelMsg, Disconnect};
 use std::time::Duration;
@@ -126,6 +126,25 @@ async fn collect_channel_output(
             Ok(None) => break,
             Err(_) => break,
         }
+        // PTY 的 SSH EOF 不等于终端输入 EOF。认证再次提示时不能继续等待，
+        // 也不能重复发送同一密码；关闭本次通道并保留认证失败输出。
+        if input_sent {
+            if let Some(command_input) = input.as_ref().filter(|input| input.wait_for.is_some()) {
+                if consume_input_marker(command_input, &mut stdout, &mut stderr) {
+                    channel.close().await.map_err(|error| {
+                        AppError::new(format!(
+                            "连接 {} 关闭认证失败通道失败: {}",
+                            connection.name, error
+                        ))
+                    })?;
+                    stderr.extend_from_slice(
+                        "\n[remote] 提权认证失败：发送密码后再次收到密码提示".as_bytes(),
+                    );
+                    exit_status = Some(1);
+                    break;
+                }
+            }
+        }
         if !input_sent {
             if let Some(command_input) = input.as_ref() {
                 if consume_input_marker(command_input, &mut stdout, &mut stderr) {
@@ -231,8 +250,16 @@ async fn execute_sudo_command_async(
             None,
         ),
     };
-    execute_remote_command_with_session_async(session, connection, &command, use_pty, input)
-        .await
+    execute_remote_command_with_session_async(session, connection, &command, use_pty, input).await
+}
+// 仅对认证前的明确终端错误重试，普通命令失败与密码错误保持原样返回。
+fn su_requires_tty(output: &ExecOutput) -> bool {
+    output.exit_code != 0
+        && output.stdout.is_empty()
+        && matches!(
+            output.stderr.trim(),
+            "standard in must be a tty" | "su: standard in must be a tty"
+        )
 }
 
 async fn execute_su_command_async(
@@ -258,19 +285,28 @@ async fn execute_su_command_async(
         )
         .await;
     }
-    // 无 -P/--pty 能力的旧版 su（CentOS 7 util-linux 2.23 等）：直接用管道 stdin 传密码，
-    // 与 -P 路径及 sudo -S 路径一致，PAM 从非 tty stdin 逐字节读取密码，不受终端缓冲影响。
-    // 不能改用 `script` 包一层 pty：script 在 stdin 非 tty 时 openpty 会拿到未初始化的
-    // termios（实测 -icanon min=0 time=0），而 PAM 读取前执行 tcsetattr(TCSAFLUSH)
-    // 会丢弃提示符之前到达的密码，su 只能收到空密码；同时该 pty 会话在 stdin EOF 时
-    // 被 script 立即关闭并以状态 0 退出，表现为只有 Password: 的静默假成功。
+    // 保留旧版 util-linux 可用的管道路径；coreutils su 明确要求 tty 时才重试。
+    // 此处尚未通过认证，目标命令未执行，因此重试不会重复执行用户命令。
     let command = su_command(&connection.su_user, remote_command);
-    execute_remote_command_with_session_async(
+    let output = execute_remote_command_with_session_async(
         session,
         connection,
         &command,
         false,
         Some(password_input(password, None)?),
+    )
+    .await?;
+    if !su_requires_tty(&output) {
+        return Ok(output);
+    }
+    // 固定认证提示语言，等 su 关闭回显并输出提示后再送密码，避免终端回显或冲刷输入。
+    // /dev/null 重定向仍只在认证成功后的目标 shell 内生效。
+    execute_remote_command_with_session_async(
+        session,
+        connection,
+        &format!("LC_ALL=C {}", command),
+        true,
+        Some(password_input(password, Some("Password:"))?),
     )
     .await
 }
@@ -342,7 +378,250 @@ pub(crate) fn execute_remote_command(
 // 避免带空格/引号的路径破坏 `cd -- <dir> && <command>` 结构。
 pub(crate) fn command_with_directory(directory: Option<&str>, command: &str) -> AppResult<String> {
     match directory {
-        Some(directory) => Ok(format!("cd -- {} && {}", serde_json::to_string(directory)?, command)),
+        Some(directory) => Ok(format!(
+            "cd -- {} && {}",
+            serde_json::to_string(directory)?,
+            command
+        )),
         None => Ok(command.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    #[test]
+    fn only_explicit_su_terminal_error_requests_retry() {
+        let mut output = ExecOutput {
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: "standard in must be a tty".into(),
+        };
+        assert!(su_requires_tty(&output));
+        output.stderr = "su: Authentication failure".into();
+        assert!(!su_requires_tty(&output));
+        output.stderr = "standard in must be a tty".into();
+        output.exit_code = 0;
+        assert!(!su_requires_tty(&output));
+        output.exit_code = 1;
+        output.stdout = "command already ran".into();
+        assert!(!su_requires_tty(&output));
+    }
+
+    #[test]
+    fn password_prompt_can_span_packets_and_streams() {
+        let input = password_input("test-password", Some("Password:")).unwrap();
+        let mut stdout = b"Pass".to_vec();
+        let mut stderr = Vec::new();
+        assert!(!consume_input_marker(&input, &mut stdout, &mut stderr));
+        stdout.extend_from_slice(b"word:");
+        assert!(consume_input_marker(&input, &mut stdout, &mut stderr));
+        assert!(stdout.is_empty());
+        stderr.extend_from_slice(b"Password:");
+        assert!(consume_input_marker(&input, &mut stdout, &mut stderr));
+        assert!(stderr.is_empty());
+        assert!(password_input("bad\npassword", None).is_err());
+    }
+
+    // 本机 SSH 服务模拟旧 su 的终端要求和认证提示，验证实际 channel 的时序及退出行为。
+    struct AuthServer {
+        mode: PrivilegeMode,
+        reject: bool,
+        terminals: HashSet<russh::ChannelId>,
+        waiting: HashSet<russh::ChannelId>,
+    }
+
+    fn finish(
+        session: &mut russh::server::Session,
+        channel: russh::ChannelId,
+        code: u32,
+    ) -> Result<(), russh::Error> {
+        session.exit_status_request(channel, code)?;
+        session.eof(channel)?;
+        session.close(channel)
+    }
+
+    impl russh::server::Handler for AuthServer {
+        type Error = russh::Error;
+
+        async fn auth_none(&mut self, _: &str) -> Result<russh::server::Auth, Self::Error> {
+            Ok(russh::server::Auth::Accept)
+        }
+
+        async fn channel_open_session(
+            &mut self,
+            _: russh::Channel<russh::server::Msg>,
+            _: &mut russh::server::Session,
+        ) -> Result<bool, Self::Error> {
+            Ok(true)
+        }
+
+        async fn pty_request(
+            &mut self,
+            channel: russh::ChannelId,
+            _: &str,
+            _: u32,
+            _: u32,
+            _: u32,
+            _: u32,
+            _: &[(russh::Pty, u32)],
+            session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            self.terminals.insert(channel);
+            session.channel_success(channel)
+        }
+
+        async fn exec_request(
+            &mut self,
+            channel: russh::ChannelId,
+            data: &[u8],
+            session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            session.channel_success(channel)?;
+            let command = std::str::from_utf8(data).unwrap();
+            if command == SU_PTY_PROBE {
+                return finish(session, channel, 1);
+            }
+            if !self.terminals.contains(&channel) {
+                assert_eq!(command, su_command("root", "id -u"));
+                session.extended_data(channel, 1, "standard in must be a tty\n")?;
+                return finish(session, channel, 1);
+            }
+            let prompt = match self.mode {
+                PrivilegeMode::Su => {
+                    assert_eq!(command, format!("LC_ALL=C {}", su_command("root", "id -u")));
+                    "Password:"
+                }
+                PrivilegeMode::Sudo => {
+                    assert_eq!(command, sudo_command("root", "id -u", true));
+                    SUDO_PROMPT_MARKER
+                }
+            };
+            self.waiting.insert(channel);
+            session.data(channel, &prompt.as_bytes()[..4])?;
+            session.data(channel, &prompt.as_bytes()[4..])?;
+            Ok(())
+        }
+
+        async fn data(
+            &mut self,
+            channel: russh::ChannelId,
+            data: &[u8],
+            session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            // 管道探测可能在报错关闭前收到密码；PTY 路径必须已发出提示且只能发送一次。
+            if !self.terminals.contains(&channel) {
+                return Ok(());
+            }
+            assert!(self.waiting.remove(&channel));
+            assert_eq!(data, b"test-password\n");
+            if self.reject {
+                let prompt = match self.mode {
+                    PrivilegeMode::Su => "Password:",
+                    PrivilegeMode::Sudo => SUDO_PROMPT_MARKER,
+                };
+                session.data(channel, format!("Sorry, try again.\n{}", prompt))?;
+                // 故意不退出，确保客户端能识别二次提示并及时关闭通道。
+                Ok(())
+            } else {
+                session.data(channel, "0\n")?;
+                finish(session, channel, 0)
+            }
+        }
+    }
+
+    #[test]
+    fn ssh_channels_support_legacy_su_and_stop_repeated_password_prompts() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            for (mode, reject) in [
+                (PrivilegeMode::Su, false),
+                (PrivilegeMode::Su, true),
+                (PrivilegeMode::Sudo, false),
+                (PrivilegeMode::Sudo, true),
+            ] {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let mut config = russh::server::Config::default();
+                config.keys.push(
+                    russh::keys::ssh_key::private::Ed25519Keypair::from_seed(&[9; 32]).into(),
+                );
+                let known_hosts_dir = tempfile::tempdir().unwrap();
+                let known_hosts_path = known_hosts_dir.path().join("known_hosts");
+                std::fs::write(
+                    &known_hosts_path,
+                    format!(
+                        "[127.0.0.1]:{} {}\n",
+                        address.port(),
+                        config.keys[0].public_key().to_openssh().unwrap()
+                    ),
+                )
+                .unwrap();
+                let server_task = tokio::spawn(async move {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    russh::server::run_stream(
+                        Arc::new(config),
+                        stream,
+                        AuthServer {
+                            mode,
+                            reject,
+                            terminals: HashSet::new(),
+                            waiting: HashSet::new(),
+                        },
+                    )
+                    .await
+                    .unwrap()
+                    .await
+                    .unwrap();
+                });
+                let mut client = client::connect(
+                    Arc::new(client::Config::default()),
+                    address,
+                    RusshClient::for_test(address.port(), known_hosts_path),
+                )
+                .await
+                .unwrap();
+                assert!(client.authenticate_none("test").await.unwrap().success());
+                let (_directory, path) = crate::test_support::write_config(
+                    r#"[{"name":"test","host":"127.0.0.1","username":"test","password":"test-password"}]"#,
+                );
+                let mut connections = crate::config::load_config(&path).unwrap();
+                let connection = &mut connections[0];
+                connection.su_password = Some("test-password".into());
+                connection.sudo_password = Some("test-password".into());
+                let output = tokio::time::timeout(
+                    Duration::from_secs(3),
+                    execute_remote_command_with_privilege_async(
+                        &client,
+                        connection,
+                        "id -u",
+                        true,
+                        Some(mode),
+                    ),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                assert_eq!(output.exit_code, u32::from(reject));
+                if reject {
+                    assert!(output.stderr.contains("再次收到密码提示"));
+                } else {
+                    assert_eq!(output.stdout, "0");
+                    assert!(!output.stdout.contains("test-password"));
+                }
+                client
+                    .disconnect(Disconnect::ByApplication, "", "")
+                    .await
+                    .unwrap();
+                drop(client);
+                tokio::time::timeout(Duration::from_secs(3), server_task)
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+        });
     }
 }

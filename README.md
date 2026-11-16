@@ -12,7 +12,7 @@
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white" alt="Node.js >=18"></a>
   <a href="https://www.npmjs.com/"><img src="https://img.shields.io/badge/npm-%3E%3D8-CB3837?logo=npm&logoColor=white" alt="npm >=8"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli"><img src="https://img.shields.io/badge/sys-win%2Fmac%2Flinux-0078D6" alt="sys win/mac/linux"></a>
-  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.8.0-blue" alt="release v0.8.0"></a>
+  <a href="https://github.com/sleepinginsummer/agent-ssh-cli/releases"><img src="https://img.shields.io/badge/release-v0.8.1-blue" alt="release v0.8.1"></a>
   <a href="https://github.com/sleepinginsummer/agent-ssh-cli/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
 </p>
 
@@ -249,6 +249,8 @@ agentsshcli exec --su 业务服务器 "id && pwd"
 ```
 
 `--sudo` 和 `--su` 互斥。两种模式都只支持非交互命令，密码发送后会关闭远端 stdin；目标命令不能继续读取 stdin。sudo 会优先使用独立 sudo 凭据，缺失时复用 SSH 密码；没有可用密码时使用 `sudo -n`，支持远端 `NOPASSWD` 或有效的 sudo 认证缓存。远端仍要求密码时会立即返回错误，不等待输入。私钥登录且远端要求密码时，需配置独立 sudo 凭据。
+
+su 不支持 `-P/--pty` 且报 `standard in must be a tty` 时，CLI 会自动分配 SSH 伪终端，等待密码提示后发送凭据，兼容旧版 coreutils su。终端认证再次索要密码时会返回认证失败，避免一直等到总超时。sudoers 未授权的命令仍会被远端拒绝。
 
 测试命令
 
